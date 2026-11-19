@@ -1246,23 +1246,28 @@ export class BoulderEngine {
     return screenToWorld({ x: e.clientX - rect.left, y: e.clientY - rect.top }, this.transform);
   }
 
-  private hitTestHold(worldPt: Vec2): Hold | null {
-    // Check from last to first (topmost rendered)
+  private hitTestHold(worldPt: Vec2, isTouch = false): Hold | null {
+    let best: Hold | null = null;
+    let bestDist = Infinity;
     for (let i = this.holds.length - 1; i >= 0; i--) {
       const h = this.holds[i];
-      const hitR = Math.max(13, getHoldHitRadius(h) + 5);
-      if (dist(worldPt, h) <= hitR) {
-        return h;
+      const hitR = isTouch
+        ? Math.max(22, getHoldHitRadius(h) + 12)
+        : Math.max(13, getHoldHitRadius(h) + 5);
+      const d = dist(worldPt, h);
+      if (d <= hitR && d < bestDist) {
+        best = h;
+        bestDist = d;
       }
     }
-    return null;
+    return best;
   }
 
   private bindEvents(): void {
     this.canvas.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return;
+      if (e.button !== 0 && e.pointerType !== 'touch') return;
       const wp = this.getPointerWorld(e);
-      const hit = this.hitTestHold(wp);
+      const hit = this.hitTestHold(wp, e.pointerType === 'touch');
 
       if (this.mode === 'setter') {
         if (hit) {

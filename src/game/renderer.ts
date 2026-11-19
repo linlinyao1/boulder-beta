@@ -94,9 +94,10 @@ const WALL_FACETS: { pts: [number, number][]; fill: string }[] = [
 
 export function computeWallTransform(canvasW: number, canvasH: number): WallTransform {
   const padRatio = 0.085; // crash pad height as fraction of wall height
-  const marginX = 44;
-  const marginTop = 62;
-  const marginBottom = 20;
+  const isCompact = canvasW <= 680;
+  const marginX = isCompact ? 30 : 44;
+  const marginTop = isCompact ? 12 : 62;
+  const marginBottom = isCompact ? 10 : 20;
 
   const availW = Math.max(200, canvasW - marginX * 2);
   const availH = Math.max(240, canvasH - marginTop - marginBottom);

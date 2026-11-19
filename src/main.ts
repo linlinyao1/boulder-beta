@@ -23,10 +23,15 @@ app.innerHTML = `
       </div>
 
       <nav class="mode-tabs" aria-label="工作模式">
-        <button class="mode-tab" data-mode="setter">1. 定线设置</button>
-        <button class="mode-tab active" data-mode="plan">2. 规划 Beta</button>
-        <button class="mode-tab" data-mode="climb">3. 攀爬演练</button>
+        <button class="mode-tab" data-mode="setter"><span class="desk-only">1. </span>定线<span class="desk-only">设置</span></button>
+        <button class="mode-tab active" data-mode="plan"><span class="desk-only">2. </span>规划<span class="desk-only"> Beta</span></button>
+        <button class="mode-tab" data-mode="climb"><span class="desk-only">3. </span>演练</button>
       </nav>
+
+      <div class="mobile-top-actions">
+        <button id="mb-route-btn" class="btn btn-sm">V1 ▾</button>
+        <button id="mb-body-btn" class="btn btn-sm mono">172cm</button>
+      </div>
 
       <div class="route-actions">
         <select id="ui-preset-select" class="select-input" title="选择预设经典线路">
@@ -62,9 +67,45 @@ app.innerHTML = `
         </div>
         <div id="ui-stage-bottom-pill" class="stage-bottom-pill hidden"></div>
         <div id="ui-result-overlay" class="result-overlay" style="display:none;"></div>
+        <div id="ui-mobile-pad" class="mobile-thumb-pad"></div>
       </section>
 
-      <aside class="sidebar">
+      <div id="ui-sheet-backdrop" class="mobile-sheet-backdrop"></div>
+      <aside class="sidebar" id="ui-sidebar">
+        <div class="mobile-sheet-header">
+          <div class="mobile-sheet-grabber"></div>
+          <div class="mobile-sheet-bar">
+            <span id="mb-sheet-title" class="section-title">设置</span>
+            <button id="mb-sheet-close" class="btn btn-sm btn-primary">完成</button>
+          </div>
+        </div>
+
+        <!-- Mobile Route Switcher & Generator Section (only shown in mobile 'route' sheet) -->
+        <section class="sidebar-section mobile-route-section" id="ui-mobile-route-section">
+          <div class="section-head">
+            <div class="section-title">经典预设线路</div>
+            <button id="mb-clear-wall" class="btn btn-sm">清空自定线</button>
+          </div>
+          <div class="mobile-preset-list" id="mb-preset-list">
+            ${PRESET_ROUTES.map(
+              (r, idx) => `
+              <button class="preset-chip" data-mb-preset="${idx}">
+                <span class="preset-chip-name">${r.grade} · ${r.name}</span>
+                <span class="preset-chip-meta">${r.description.slice(0, 26)}…</span>
+              </button>`
+            ).join('')}
+          </div>
+          <div class="section-head" style="margin-top:14px;">
+            <div class="section-title">随机生成难度线路</div>
+            <span class="section-sub">点击难度立即生成</span>
+          </div>
+          <div class="mobile-grade-grid" id="mb-grade-grid">
+            ${[0, 1, 2, 3, 4, 5, 6, 7]
+              .map((g) => `<button class="btn btn-sm" data-mb-grade="${g}">V${g}</button>`)
+              .join('')}
+          </div>
+        </section>
+
         <!-- Persistent Climber Body Section -->
         <section class="sidebar-section" id="ui-body-section">
           <div class="section-head">
@@ -141,6 +182,41 @@ const stageTopDock = document.querySelector<HTMLDivElement>('#ui-stage-top-dock'
 const stageBottomPill = document.querySelector<HTMLDivElement>('#ui-stage-bottom-pill')!;
 const resultOverlay = document.querySelector<HTMLDivElement>('#ui-result-overlay')!;
 const modePanel = document.querySelector<HTMLElement>('#ui-mode-panel')!;
+const mobilePad = document.querySelector<HTMLDivElement>('#ui-mobile-pad')!;
+const sidebarEl = document.querySelector<HTMLElement>('#ui-sidebar')!;
+const sheetBackdrop = document.querySelector<HTMLDivElement>('#ui-sheet-backdrop')!;
+const mbRouteBtn = document.querySelector<HTMLButtonElement>('#mb-route-btn')!;
+const mbBodyBtn = document.querySelector<HTMLButtonElement>('#mb-body-btn')!;
+const mbSheetTitle = document.querySelector<HTMLSpanElement>('#mb-sheet-title')!;
+const mbSheetClose = document.querySelector<HTMLButtonElement>('#mb-sheet-close')!;
+const mbClearWall = document.querySelector<HTMLButtonElement>('#mb-clear-wall')!;
+const mbPresetList = document.querySelector<HTMLDivElement>('#mb-preset-list')!;
+const mbGradeGrid = document.querySelector<HTMLDivElement>('#mb-grade-grid')!;
+
+type MobileSheetMode = 'none' | 'body' | 'route' | 'panel';
+let mobileSheet: MobileSheetMode = 'none';
+
+function setMobileSheet(mode: MobileSheetMode): void {
+  mobileSheet = mode;
+  const isOpen = mode !== 'none';
+  sidebarEl.classList.toggle('sheet-open', isOpen);
+  sidebarEl.classList.toggle('sheet-mode-body', mode === 'body');
+  sidebarEl.classList.toggle('sheet-mode-route', mode === 'route');
+  sidebarEl.classList.toggle('sheet-mode-panel', mode === 'panel');
+  sheetBackdrop.classList.toggle('open', isOpen);
+  const titles: Record<MobileSheetMode, string> = {
+    none: '',
+    body: '攀岩者体型与能力',
+    route: '选择或随机生成线路',
+    panel:
+      latestSnap?.mode === 'setter'
+        ? '岩点画笔与参数'
+        : latestSnap?.mode === 'climb'
+          ? '攀爬步骤追踪'
+          : 'Beta 步骤列表',
+  };
+  mbSheetTitle.textContent = titles[mode];
+}
 
 // Body controls
 const bodySummary = document.querySelector<HTMLDivElement>('#ui-body-summary')!;
@@ -191,6 +267,35 @@ genBtn.addEventListener('click', () => {
 clearWallBtn.addEventListener('click', () => {
   presetSelect.value = '';
   engine.clearWall();
+});
+
+mbRouteBtn.addEventListener('click', () => setMobileSheet(mobileSheet === 'route' ? 'none' : 'route'));
+mbBodyBtn.addEventListener('click', () => setMobileSheet(mobileSheet === 'body' ? 'none' : 'body'));
+mbSheetClose.addEventListener('click', () => setMobileSheet('none'));
+sheetBackdrop.addEventListener('click', () => setMobileSheet('none'));
+mbClearWall.addEventListener('click', () => {
+  presetSelect.value = '';
+  engine.clearWall();
+  setMobileSheet('none');
+});
+mbPresetList.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-mb-preset]');
+  if (!btn) return;
+  const idx = Number(btn.dataset.mbPreset);
+  if (PRESET_ROUTES[idx]) {
+    presetSelect.value = String(idx);
+    engine.loadRoute(PRESET_ROUTES[idx]);
+    setMobileSheet('none');
+  }
+});
+mbGradeGrid.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-mb-grade]');
+  if (!btn) return;
+  const g = Number(btn.dataset.mbGrade);
+  genGradeSelect.value = String(g);
+  presetSelect.value = '';
+  engine.generateNewRoute(g);
+  setMobileSheet('none');
 });
 
 // Body controls events
@@ -306,9 +411,159 @@ function syncUI(snap: EngineSnapshot): void {
   renderStageTopDock(snap);
   renderStageBottomPill(snap);
   renderResultOverlay(snap);
+  renderMobilePad(snap);
+  mbRouteBtn.textContent = `${snap.routeGrade} ▾`;
+  mbBodyBtn.textContent = `${snap.profile.heightCm}cm`;
   const activeId = document.activeElement?.id;
   if (activeId !== 'st-angle' && activeId !== 'st-scale') {
     renderModePanel(snap);
+  }
+}
+
+function renderMobilePad(snap: EngineSnapshot): void {
+  if (snap.mode === 'plan') {
+    mobilePad.innerHTML = `
+      <div class="mp-row mp-grid-4">
+        ${ALL_LIMBS.map((limb) => {
+          const m = LIMB_META[limb];
+          const active = snap.activeLimb === limb;
+          return `
+            <button class="mp-btn ${active ? 'active' : ''}" data-mp-limb="${limb}" style="${
+              active ? `border-color:${m.color};color:${m.color};` : ''
+            }">
+              <span class="limb-dot" style="background:${m.color}"></span>
+              <span>${m.nameZh}</span>
+            </button>
+          `;
+        }).join('')}
+      </div>
+      <div class="mp-row mp-grid-5">
+        ${(
+          [
+            ['hold', '抓点'],
+            ['smear', '踩墙'],
+            ['flag', '悬空'],
+            ['dyno', '飞跃'],
+            ['doubleDyno', '双飞'],
+          ] as [PlanContactMode, string][]
+        )
+          .map(
+            ([mode, label]) => `
+            <button class="mp-btn ${snap.planContactMode === mode ? 'active' : ''}" data-mp-cmode="${mode}" style="${
+              snap.planContactMode === mode
+                ? mode === 'dyno' || mode === 'doubleDyno'
+                  ? 'border-color:#d97706;color:#b45309;background:#fffbeb;'
+                  : 'border-color:#181d22;'
+                : ''
+            }">${label}</button>`
+          )
+          .join('')}
+      </div>
+      <div class="mp-row mp-actions">
+        <button class="btn btn-sm" id="mp-ai">AI 推演</button>
+        <button class="btn btn-sm" id="mp-undo" ${snap.betaSteps.length === 0 ? 'disabled' : ''}>撤销</button>
+        <button class="btn btn-sm" id="mp-steps">步骤 (${snap.betaSteps.length})</button>
+        <button class="btn btn-sm ${snap.betaReachesTop ? 'btn-accent' : 'btn-primary'}" id="mp-climb" style="flex:1.4;" ${
+          snap.betaSteps.length === 0 ? 'disabled' : ''
+        }>▶ 攀爬</button>
+      </div>
+    `;
+
+    mobilePad.querySelectorAll<HTMLButtonElement>('[data-mp-limb]').forEach((b) => {
+      b.addEventListener('click', () => engine.setActiveLimb(b.dataset.mpLimb as EngineSnapshot['activeLimb']));
+    });
+    mobilePad.querySelectorAll<HTMLButtonElement>('[data-mp-cmode]').forEach((b) => {
+      b.addEventListener('click', () => engine.setPlanContactMode(b.dataset.mpCmode as PlanContactMode));
+    });
+    mobilePad.querySelector('#mp-ai')?.addEventListener('click', () => engine.autoSuggestBeta());
+    mobilePad.querySelector('#mp-undo')?.addEventListener('click', () => engine.undoBetaStep());
+    mobilePad.querySelector('#mp-steps')?.addEventListener('click', () => setMobileSheet('panel'));
+    mobilePad.querySelector('#mp-climb')?.addEventListener('click', () => engine.startClimb());
+  } else if (snap.mode === 'setter') {
+    const selected = snap.selectedHoldId
+      ? snap.holds.find((h) => h.id === snap.selectedHoldId) ?? null
+      : null;
+    const activeType = selected ? selected.type : snap.brush.type;
+    const activeRole = selected ? selected.role : snap.brush.role;
+    const startCount = snap.holds.filter((h) => h.role === 'start').length;
+    const topCount = snap.holds.filter((h) => h.role === 'top').length;
+
+    mobilePad.innerHTML = `
+      <div class="mp-row mp-grid-6">
+        ${(Object.keys(HOLD_SPECS) as HoldType[])
+          .map((t) => {
+            const shortLabel = HOLD_SPECS[t].shortZh.replace('大', '');
+            return `<button class="mp-btn ${activeType === t ? 'active' : ''}" data-mp-htype="${t}">${shortLabel}</button>`;
+          })
+          .join('')}
+      </div>
+      <div class="mp-row mp-actions">
+        <button class="btn btn-sm" id="mp-role">${
+          activeRole === 'start' ? '属性:起步' : activeRole === 'top' ? '属性:完攀' : '属性:普通'
+        }</button>
+        ${
+          selected
+            ? `<button class="btn btn-sm" id="mp-rot">旋转</button>
+               <button class="btn btn-sm btn-danger" id="mp-del">删</button>`
+            : `<button class="btn btn-sm" id="mp-setter-more">颜色/角度</button>`
+        }
+        <button class="btn btn-sm btn-primary" id="mp-go-plan" style="flex:1;" ${
+          startCount === 0 || topCount === 0 ? 'disabled' : ''
+        }>去规划 →</button>
+      </div>
+    `;
+
+    mobilePad.querySelectorAll<HTMLButtonElement>('[data-mp-htype]').forEach((b) => {
+      b.addEventListener('click', () => {
+        const type = b.dataset.mpHtype as HoldType;
+        if (selected) engine.updateSelectedHold({ type });
+        else engine.setBrush({ type });
+      });
+    });
+    mobilePad.querySelector('#mp-role')?.addEventListener('click', () => {
+      const nextRole: HoldRole =
+        activeRole === 'normal' ? 'start' : activeRole === 'start' ? 'top' : 'normal';
+      if (selected) engine.updateSelectedHold({ role: nextRole });
+      else engine.setBrush({ role: nextRole });
+    });
+    mobilePad.querySelector('#mp-rot')?.addEventListener('click', () => engine.rotateSelectedHold(15));
+    mobilePad.querySelector('#mp-del')?.addEventListener('click', () => engine.deleteSelectedHold());
+    mobilePad.querySelector('#mp-setter-more')?.addEventListener('click', () => setMobileSheet('panel'));
+    mobilePad.querySelector('#mp-go-plan')?.addEventListener('click', () => engine.setMode('plan'));
+  } else {
+    const stam = Math.round(snap.climbStamina);
+    const stamColor = stam > 50 ? '#16A34A' : stam > 25 ? '#D97706' : '#DC2626';
+    mobilePad.innerHTML = `
+      <div class="mp-row mp-climb-bar">
+        <span class="mono" style="font-size:11.5px;font-weight:600;">体能 ${stam}%</span>
+        <div class="stamina-bar-track" style="flex:1;">
+          <div class="stamina-bar-fill" style="width:${stam}%;background:${stamColor};"></div>
+        </div>
+        <span class="mono" style="font-size:11.5px;color:var(--ink-secondary);">稳 ${Math.round(snap.climbBalance)}%</span>
+        <div class="speed-group">
+          ${[0.6, 1.0, 1.5]
+            .map(
+              (spd) =>
+                `<button class="speed-btn ${snap.playbackSpeed === spd ? 'active' : ''}" data-mp-spd="${spd}">${spd}x</button>`
+            )
+            .join('')}
+        </div>
+      </div>
+      <div class="mp-row mp-actions">
+        <button class="btn btn-sm btn-primary" id="mp-play" style="flex:1;">${
+          snap.climbStatus === 'running' ? '暂停' : snap.climbStatus === 'paused' ? '继续' : '重播'
+        }</button>
+        <button class="btn btn-sm" id="mp-cl-steps">步骤</button>
+        <button class="btn btn-sm" id="mp-cl-plan" style="flex:1;">修改 Beta</button>
+      </div>
+    `;
+
+    mobilePad.querySelectorAll<HTMLButtonElement>('[data-mp-spd]').forEach((b) => {
+      b.addEventListener('click', () => engine.setPlaybackSpeed(Number(b.dataset.mpSpd)));
+    });
+    mobilePad.querySelector('#mp-play')?.addEventListener('click', () => engine.togglePauseClimb());
+    mobilePad.querySelector('#mp-cl-steps')?.addEventListener('click', () => setMobileSheet('panel'));
+    mobilePad.querySelector('#mp-cl-plan')?.addEventListener('click', () => engine.setMode('plan'));
   }
 }
 
