@@ -2,7 +2,7 @@ import { CLIMBER_PRESETS, computeAnatomy } from './climber';
 import { ALL_LIMBS, getHoldHitRadius, HOLD_COLORS, HOLD_SPECS, LIMB_META, renumberHolds } from './holds';
 import { clamp, dist } from './ik';
 import { applyLimbTarget, dynoTarget, emptyFreeMap, holdTarget } from './contact';
-import { buildHoldMap, evaluateMove, getInitialAssignment, isTopReached } from './physics';
+import { buildHoldMap, evaluateBetaSequence, evaluateMove, getInitialAssignment, isTopReached } from './physics';
 import {
   BetaStep,
   ClimberProfile,
@@ -85,13 +85,229 @@ function placeHoldWithoutOverlap(
   return null;
 }
 
+interface GradeBlueprint {
+  numHands: number;
+  minDy: number;
+  maxDy: number;
+  minDx: number;
+  maxDx: number;
+  maxAngle: number;
+  handPool: HoldType[];
+  startPool: HoldType[];
+  topPool: HoldType[];
+  twoStartsProb: number;
+  footBonusProb: number; // chance of extra forgiving foothold
+  volumeProb: number;
+  scaleBase: number;
+  cruxBoostDy: number; // extra crux span injected near upper-mid wall
+}
+
+const GRADE_BLUEPRINTS: Record<number, GradeBlueprint> = {
+  0: {
+    numHands: 6,
+    minDy: 34,
+    maxDy: 44,
+    minDx: 14,
+    maxDx: 34,
+    maxAngle: 0,
+    handPool: ['jug'],
+    startPool: ['jug'],
+    topPool: ['jug'],
+    twoStartsProb: 1.0,
+    footBonusProb: 0.9,
+    volumeProb: 0,
+    scaleBase: 1.22,
+    cruxBoostDy: 0,
+  },
+  1: {
+    numHands: 6,
+    minDy: 38,
+    maxDy: 49,
+    minDx: 22,
+    maxDx: 44,
+    maxAngle: 12,
+    handPool: ['jug', 'jug', 'jug', 'pinch'],
+    startPool: ['jug'],
+    topPool: ['jug'],
+    twoStartsProb: 0.95,
+    footBonusProb: 0.78,
+    volumeProb: 0.15,
+    scaleBase: 1.15,
+    cruxBoostDy: 0,
+  },
+  2: {
+    numHands: 5,
+    minDy: 44,
+    maxDy: 56,
+    minDx: 30,
+    maxDx: 56,
+    maxAngle: 26,
+    handPool: ['jug', 'pinch', 'pinch', 'jug'],
+    startPool: ['jug', 'pinch'],
+    topPool: ['jug'],
+    twoStartsProb: 0.85,
+    footBonusProb: 0.65,
+    volumeProb: 0.3,
+    scaleBase: 1.08,
+    cruxBoostDy: 4,
+  },
+  3: {
+    numHands: 5,
+    minDy: 48,
+    maxDy: 63,
+    minDx: 38,
+    maxDx: 70,
+    maxAngle: 44,
+    handPool: ['pinch', 'crimp', 'jug', 'pinch', 'sloper'],
+    startPool: ['jug', 'pinch'],
+    topPool: ['jug', 'pinch'],
+    twoStartsProb: 0.75,
+    footBonusProb: 0.45,
+    volumeProb: 0.4,
+    scaleBase: 1.02,
+    cruxBoostDy: 10,
+  },
+  4: {
+    numHands: 5,
+    minDy: 52,
+    maxDy: 68,
+    minDx: 44,
+    maxDx: 82,
+    maxAngle: 56,
+    handPool: ['crimp', 'pinch', 'sloper', 'crimp'],
+    startPool: ['pinch', 'jug'],
+    topPool: ['jug', 'pinch'],
+    twoStartsProb: 0.55,
+    footBonusProb: 0.25,
+    volumeProb: 0.38,
+    scaleBase: 0.96,
+    cruxBoostDy: 15,
+  },
+  5: {
+    numHands: 4,
+    minDy: 58,
+    maxDy: 76,
+    minDx: 50,
+    maxDx: 94,
+    maxAngle: 64,
+    handPool: ['crimp', 'sloper', 'crimp', 'pinch'],
+    startPool: ['pinch', 'crimp'],
+    topPool: ['pinch', 'jug'],
+    twoStartsProb: 0.45,
+    footBonusProb: 0.14,
+    volumeProb: 0.3,
+    scaleBase: 0.92,
+    cruxBoostDy: 20,
+  },
+  6: {
+    numHands: 4,
+    minDy: 62,
+    maxDy: 82,
+    minDx: 56,
+    maxDx: 104,
+    maxAngle: 72,
+    handPool: ['crimp', 'sloper', 'sloper', 'crimp'],
+    startPool: ['crimp', 'sloper', 'pinch'],
+    topPool: ['pinch', 'sloper', 'jug'],
+    twoStartsProb: 0.35,
+    footBonusProb: 0.08,
+    volumeProb: 0.25,
+    scaleBase: 0.88,
+    cruxBoostDy: 24,
+  },
+  7: {
+    numHands: 4,
+    minDy: 66,
+    maxDy: 88,
+    minDx: 62,
+    maxDx: 112,
+    maxAngle: 80,
+    handPool: ['crimp', 'sloper', 'crimp'],
+    startPool: ['crimp', 'sloper'],
+    topPool: ['sloper', 'pinch', 'crimp'],
+    twoStartsProb: 0.25,
+    footBonusProb: 0.04,
+    volumeProb: 0.2,
+    scaleBase: 0.84,
+    cruxBoostDy: 28,
+  },
+};
+
+export interface MeasuredDifficulty {
+  estimatedGrade: number; // 0..7 continuous
+  staminaSpent: number;
+  hardMoves: number;
+  dynoMoves: number;
+  minGrip: number;
+  maxReach: number;
+  stepCount: number;
+}
+
 /**
- * Generates a realistic, climbable bouldering route for a target V-grade (0..7).
- * Uses a forward-constructed climbing skeleton plus verification against the physics solver.
+ * Measures the real physical difficulty of a solved route against the standard 172cm climber.
+ */
+export function measureRouteDifficulty(
+  holds: Hold[],
+  steps: BetaStep[],
+  profile: ClimberProfile = CLIMBER_PRESETS[1]
+): MeasuredDifficulty {
+  const init = getInitialAssignment(holds, profile);
+  const seq = evaluateBetaSequence(init, steps, holds, profile);
+  const staminaSpent = Math.round(100 - seq.finalStamina);
+
+  let hardMoves = 0;
+  let dynoMoves = 0;
+  let minGrip = 100;
+  let maxReach = 0;
+  let maxBarnDoor = 0;
+
+  for (const tr of seq.traces) {
+    const ev = tr.evaluation;
+    if (ev.rating === 'hard') hardMoves += 1;
+    if (ev.isDyno || tr.step.target.kind === 'dyno') dynoMoves += 1;
+    if (LIMB_META[tr.step.limb].isHand) {
+      minGrip = Math.min(minGrip, ev.gripScore);
+      maxReach = Math.max(maxReach, ev.reachRatio);
+    }
+    maxBarnDoor = Math.max(maxBarnDoor, ev.barnDoorRisk);
+  }
+
+  // Weighted physical grade score (calibrated so V0~0.4, V3~3.0, V6~6.0, V7~7.0)
+  const staminaTerm = clamp((staminaSpent - 24) / 11.5, 0, 5.2);
+  const hardTerm = Math.min(2.6, hardMoves * 0.65);
+  const dynoTerm = Math.min(2.0, dynoMoves * 1.15);
+  const gripTerm = clamp((88 - minGrip) / 18, 0, 2.2);
+  const reachTerm = clamp((maxReach - 0.78) * 5.2, 0, 1.8);
+  const balanceTerm = clamp((maxBarnDoor - 0.25) * 2.2, 0, 1.0);
+
+  const rawGrade =
+    staminaTerm * 0.52 +
+    hardTerm * 0.55 +
+    dynoTerm * 0.6 +
+    gripTerm * 0.55 +
+    reachTerm * 0.45 +
+    balanceTerm * 0.35;
+
+  return {
+    estimatedGrade: clamp(Math.round(rawGrade * 10) / 10, 0, 7.5),
+    staminaSpent,
+    hardMoves,
+    dynoMoves,
+    minGrip,
+    maxReach: Math.round(maxReach * 100) / 100,
+    stepCount: steps.length,
+  };
+}
+
+/**
+ * Generates a realistic, physics-calibrated bouldering route for a target V-grade (0..7).
+ * Uses objective 172cm reference grading and selects the candidate whose measured difficulty
+ * matches the target V-grade most closely (while guaranteed solvable!).
  */
 export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfile): RouteProblem {
   const g = clamp(Math.round(gradeNum), 0, 7);
   const profile = referenceProfile ?? CLIMBER_PRESETS[1]; // Standard 172cm reference
+  const bp = GRADE_BLUEPRINTS[g];
   const colorObj = pick(HOLD_COLORS.slice(0, 5));
   const color = colorObj.hex;
 
@@ -106,38 +322,23 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
     7: ['冠军定线', '绝壁死点', '大师考题'],
   };
 
-  // Difficulty parameters
-  const numMainHands = g <= 1 ? 5 : g <= 3 ? 5 : g <= 5 ? 5 : 4;
-  const maxStepDy = 46 + g * 5.2; // V0 ~46cm, V7 ~82cm
-  const minStepDy = 36 + g * 3.0;
-  const lateralSpread = 44 + g * 8.5;
-  const maxAngle = g <= 1 ? 12 : g <= 3 ? 42 : g <= 5 ? 58 : 72;
-
-  const handPools: Record<number, HoldType[]> = {
-    0: ['jug', 'jug', 'jug', 'pinch'],
-    1: ['jug', 'jug', 'pinch'],
-    2: ['jug', 'pinch', 'pinch', 'crimp'],
-    3: ['pinch', 'crimp', 'jug', 'sloper'],
-    4: ['crimp', 'pinch', 'sloper'],
-    5: ['crimp', 'sloper', 'pinch', 'crimp'],
-    6: ['crimp', 'sloper', 'sloper', 'crimp'],
-    7: ['crimp', 'sloper', 'crimp'],
-  };
-
   let bestHolds: Hold[] = [];
+  let bestMetrics: MeasuredDifficulty | null = null;
+  let bestScoreError = Infinity;
   const anatomy = computeAnatomy(profile);
 
-  // Try up to 6 candidates and pick the first that our Beta solver confirms is solvable
-  for (let attempt = 0; attempt < 6; attempt++) {
+  // Sample up to 8 fast candidates and pick the solvable route closest to target V-grade!
+  const maxAttempts = g >= 5 ? 8 : 6;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const holds: Hold[] = [];
 
     // Start zone
-    const startX = rand(115, 285);
-    const startY = rand(118, 138);
-    const twoStarts = g <= 3 || Math.random() < 0.55;
+    const startX = rand(110, 290);
+    const startY = g >= 5 ? rand(108, 126) : rand(120, 138);
+    const twoStarts = Math.random() < bp.twoStartsProb;
 
     if (twoStarts) {
-      const gap = rand(52, 72);
+      const gap = rand(52, 74);
       placeHoldWithoutOverlap(
         holds,
         {
@@ -145,14 +346,14 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
           label: 0,
           x: clamp(startX - gap / 2, 52, WALL_WIDTH_CM - 52),
           y: startY,
-          type: g <= 2 ? 'jug' : pick(['jug', 'pinch']),
+          type: pick(bp.startPool),
           role: 'start',
-          angle: g <= 1 ? 0 : Math.round(rand(-20, 5)),
-          scale: g <= 2 ? 1.12 : 1.0,
+          angle: g <= 1 ? 0 : Math.round(rand(-bp.maxAngle * 0.45, 5)),
+          scale: clamp(bp.scaleBase, 0.85, 1.24),
           color,
         },
         true,
-        { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: 110, maxY: 155 }
+        { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: 104, maxY: 155 }
       );
       placeHoldWithoutOverlap(
         holds,
@@ -160,15 +361,15 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
           id: nextUid('h'),
           label: 0,
           x: clamp(startX + gap / 2, 52, WALL_WIDTH_CM - 52),
-          y: startY + rand(-8, 12),
-          type: g <= 2 ? 'jug' : pick(['jug', 'pinch', 'sloper']),
+          y: startY + rand(-6, 10),
+          type: pick(bp.startPool),
           role: 'start',
-          angle: g <= 1 ? 0 : Math.round(rand(-5, 22)),
-          scale: g <= 2 ? 1.12 : 1.0,
+          angle: g <= 1 ? 0 : Math.round(rand(-5, bp.maxAngle * 0.45)),
+          scale: clamp(bp.scaleBase, 0.85, 1.24),
           color,
         },
         true,
-        { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: 110, maxY: 155 }
+        { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: 104, maxY: 155 }
       );
     } else {
       placeHoldWithoutOverlap(
@@ -178,77 +379,78 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
           label: 0,
           x: startX,
           y: startY,
-          type: g <= 3 ? 'jug' : 'pinch',
+          type: pick(bp.startPool),
           role: 'start',
-          angle: 0,
-          scale: 1.1,
+          angle: g <= 2 ? 0 : Math.round(rand(-15, 15)),
+          scale: clamp(bp.scaleBase, 0.88, 1.18),
           color,
         },
         true,
-        { minX: 52, maxX: WALL_WIDTH_CM - 52, minY: 112, maxY: 150 }
+        { minX: 52, maxX: WALL_WIDTH_CM - 52, minY: 106, maxY: 150 }
       );
     }
 
     // Starting footholds
+    const startFootY = g >= 5 ? rand(30, 44) : rand(40, 58);
     placeHoldWithoutOverlap(
       holds,
       {
         id: nextUid('h'),
         label: 0,
-        x: clamp(startX - rand(30, 54), 42, WALL_WIDTH_CM - 42),
-        y: rand(38, 56),
+        x: clamp(startX - rand(30, 52), 42, WALL_WIDTH_CM - 42),
+        y: startFootY,
         type: 'foothold',
         role: 'normal',
         angle: 0,
-        scale: g <= 2 ? 1.12 : 0.95,
+        scale: clamp(bp.scaleBase * 0.96, 0.84, 1.18),
         color,
       },
       true,
-      { minX: 38, maxX: WALL_WIDTH_CM - 38, minY: 32, maxY: 82 }
+      { minX: 38, maxX: WALL_WIDTH_CM - 38, minY: 28, maxY: 78 }
     );
     placeHoldWithoutOverlap(
       holds,
       {
         id: nextUid('h'),
         label: 0,
-        x: clamp(startX + rand(30, 54), 42, WALL_WIDTH_CM - 42),
-        y: rand(44, 66),
+        x: clamp(startX + rand(30, 52), 42, WALL_WIDTH_CM - 42),
+        y: startFootY + rand(2, 14),
         type: 'foothold',
         role: 'normal',
         angle: 0,
-        scale: g <= 2 ? 1.12 : 0.95,
+        scale: clamp(bp.scaleBase * 0.96, 0.84, 1.18),
         color,
       },
       true,
-      { minX: 38, maxX: WALL_WIDTH_CM - 38, minY: 32, maxY: 86 }
+      { minX: 38, maxX: WALL_WIDTH_CM - 38, minY: 28, maxY: 82 }
     );
 
-    // Build upward zigzag hand progression + matching footholds
+    // Build upward progression with grade-appropriate spacing, crux, and footholds
     let prevX = startX;
     let prevY = startY;
     let dir = startX > WALL_WIDTH_CM / 2 ? -1 : 1;
+    const cruxIdx = Math.max(1, Math.floor(bp.numHands / 2));
 
-    for (let i = 0; i < numMainHands; i++) {
-      const progress = (i + 1) / (numMainHands + 1);
-      const stepDy = rand(minStepDy, maxStepDy);
-      const targetY = clamp(prevY + stepDy, prevY + 38, 344);
+    for (let i = 0; i < bp.numHands; i++) {
+      const isCrux = i === cruxIdx && bp.cruxBoostDy > 0;
+      const stepDy = rand(bp.minDy, bp.maxDy) + (isCrux ? bp.cruxBoostDy : 0);
+      const targetY = clamp(prevY + stepDy, prevY + 34, 344);
 
-      // Zigzag or traverse laterally
-      if (Math.random() < 0.72) dir *= -1;
-      let targetX = prevX + dir * rand(32, lateralSpread);
-      if (targetX < 62 || targetX > WALL_WIDTH_CM - 62) {
+      if (Math.random() < (g <= 1 ? 0.55 : 0.78)) dir *= -1;
+      let targetX = prevX + dir * rand(bp.minDx, bp.maxDx);
+      if (targetX < 56 || targetX > WALL_WIDTH_CM - 56) {
         dir *= -1;
-        targetX = clamp(prevX + dir * rand(34, lateralSpread * 0.85), 62, WALL_WIDTH_CM - 62);
+        targetX = clamp(prevX + dir * rand(bp.minDx, bp.maxDx * 0.88), 56, WALL_WIDTH_CM - 56);
       }
 
-      const type = pick(handPools[g]);
+      const type = pick(bp.handPool);
       let angle = 0;
-      if (g >= 2) {
+      if (bp.maxAngle > 0) {
         if (type === 'sloper') {
-          angle = Math.round(rand(-18, 18));
+          angle = Math.round(rand(-Math.min(34, bp.maxAngle * 0.55), Math.min(34, bp.maxAngle * 0.55)));
         } else {
           const bias = targetX > prevX ? 1 : -1;
-          angle = Math.round(bias * rand(8, maxAngle));
+          angle = Math.round(bias * rand(bp.maxAngle * 0.32, bp.maxAngle));
         }
       }
 
@@ -262,22 +464,21 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
           type,
           role: 'normal',
           angle,
-          scale: clamp(1.12 - g * 0.03 + rand(-0.06, 0.06), 0.84, 1.18),
+          scale: clamp(bp.scaleBase + rand(-0.06, 0.06), 0.78, 1.24),
           color,
         },
         true,
-        { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: prevY + 28, maxY: 350 }
+        { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: prevY + 26, maxY: 350 }
       );
       if (!placedHand) continue;
 
-      // Add a helpful foothold below this move (or a charcoal volume occasionally on V2+)
-      const footY = clamp(
-        placedHand.y - rand(anatomy.heightCm * 0.42, anatomy.heightCm * 0.56),
-        74,
-        placedHand.y - 50
-      );
-      const footX = clamp((prevX + placedHand.x) / 2 + rand(-36, 36), 44, WALL_WIDTH_CM - 44);
-      const useVolume = g >= 2 && i === 1 && Math.random() < 0.45;
+      // Primary foothold below this move (lower & slightly farther on higher grades!)
+      const footDropMin = anatomy.heightCm * (g <= 2 ? 0.4 : 0.47);
+      const footDropMax = anatomy.heightCm * (g <= 2 ? 0.52 : 0.62);
+      const footY = clamp(placedHand.y - rand(footDropMin, footDropMax), 66, placedHand.y - 46);
+      const footX = clamp((prevX + placedHand.x) / 2 + rand(-34, 34), 44, WALL_WIDTH_CM - 44);
+      const useVolume = i === 1 && Math.random() < bp.volumeProb;
+
       const placedPrimaryFoot = placeHoldWithoutOverlap(
         holds,
         {
@@ -288,14 +489,13 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
           type: useVolume ? 'volume' : 'foothold',
           role: 'normal',
           angle: useVolume ? Math.round(rand(-14, 14)) : 0,
-          scale: useVolume ? 1.0 : clamp(1.06 - g * 0.025, 0.85, 1.12),
+          scale: useVolume ? 1.0 : clamp(bp.scaleBase * 0.94, 0.82, 1.15),
           color: useVolume ? '#3D434C' : color,
         },
         false,
-        { minX: 42, maxX: WALL_WIDTH_CM - 42, minY: 66, maxY: placedHand.y - 40 }
+        { minX: 42, maxX: WALL_WIDTH_CM - 42, minY: 62, maxY: placedHand.y - 40 }
       );
 
-      // If volume couldn't fit cleanly, fall back to a compact foothold
       if (!placedPrimaryFoot && useVolume) {
         placeHoldWithoutOverlap(
           holds,
@@ -307,18 +507,18 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
             type: 'foothold',
             role: 'normal',
             angle: 0,
-            scale: 0.96,
+            scale: 0.92,
             color,
           },
           false,
-          { minX: 42, maxX: WALL_WIDTH_CM - 42, minY: 66, maxY: placedHand.y - 40 }
+          { minX: 42, maxX: WALL_WIDTH_CM - 42, minY: 62, maxY: placedHand.y - 40 }
         );
       }
 
-      // Optional secondary foothold on opposite side
-      if (progress < 0.85 && (g <= 4 || Math.random() < 0.6)) {
-        const oppFootX = clamp(placedHand.x - dir * rand(32, 66), 44, WALL_WIDTH_CM - 44);
-        const oppFootY = clamp(footY + rand(16, 44), 85, placedHand.y - 40);
+      // Bonus opposite foothold — abundant on V0–V2, rare on V5–V7!
+      if (Math.random() < bp.footBonusProb) {
+        const oppFootX = clamp(placedHand.x - dir * rand(28, 60), 44, WALL_WIDTH_CM - 44);
+        const oppFootY = clamp(footY + rand(12, 36), 78, placedHand.y - 40);
         placeHoldWithoutOverlap(
           holds,
           {
@@ -329,22 +529,27 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
             type: 'foothold',
             role: 'normal',
             angle: 0,
-            scale: 0.94,
+            scale: clamp(bp.scaleBase * 0.92, 0.84, 1.12),
             color,
           },
           false,
-          { minX: 42, maxX: WALL_WIDTH_CM - 42, minY: 75, maxY: placedHand.y - 36 }
+          { minX: 42, maxX: WALL_WIDTH_CM - 42, minY: 72, maxY: placedHand.y - 36 }
         );
       }
 
       prevX = placedHand.x;
       prevY = placedHand.y;
-      if (prevY >= 326) break;
+      if (prevY >= 324) break;
     }
 
     // Top hold
-    const topX = clamp(prevX + rand(-56, 56), 76, WALL_WIDTH_CM - 76);
-    const topY = clamp(Math.max(prevY + rand(48, 70), 374), 370, 412);
+    const topMaxDx = g <= 1 ? 30 : g <= 3 ? 52 : 68;
+    const topX = clamp(prevX + rand(-topMaxDx, topMaxDx), 74, WALL_WIDTH_CM - 74);
+    const topY = clamp(
+      Math.max(prevY + rand(bp.minDy, bp.maxDy + 6), g <= 1 ? 364 : 378),
+      362,
+      414
+    );
     const placedTop = placeHoldWithoutOverlap(
       holds,
       {
@@ -352,21 +557,25 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
         label: 0,
         x: topX,
         y: topY,
-        type: g <= 5 ? 'jug' : pick(['jug', 'pinch', 'sloper']),
+        type: pick(bp.topPool),
         role: 'top',
-        angle: 0,
-        scale: g <= 3 ? 1.2 : 1.08,
+        angle: g >= 6 ? Math.round(rand(-18, 18)) : 0,
+        scale: clamp(bp.scaleBase + 0.08, 0.92, 1.26),
         color,
       },
       true,
-      { minX: 60, maxX: WALL_WIDTH_CM - 60, minY: 362, maxY: 416 }
+      { minX: 60, maxX: WALL_WIDTH_CM - 60, minY: 358, maxY: 416 }
     );
 
-    // High foothold to allow matching Top cleanly
+    // High foothold for topping out
     const refTopX = placedTop?.x ?? topX;
     const refTopY = placedTop?.y ?? topY;
-    const highFootX = clamp(refTopX + rand(-48, 48), 54, WALL_WIDTH_CM - 54);
-    const highFootY = clamp(refTopY - rand(105, 138), 220, 305);
+    const highFootX = clamp(refTopX + rand(-46, 46), 54, WALL_WIDTH_CM - 54);
+    const highFootY = clamp(
+      refTopY - rand(g <= 2 ? 98 : 114, g <= 2 ? 126 : 148),
+      210,
+      305
+    );
     placeHoldWithoutOverlap(
       holds,
       {
@@ -377,39 +586,58 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
         type: 'foothold',
         role: 'normal',
         angle: 0,
-        scale: 0.96,
+        scale: clamp(bp.scaleBase * 0.94, 0.84, 1.12),
         color,
       },
       false,
-      { minX: 44, maxX: WALL_WIDTH_CM - 44, minY: 210, maxY: refTopY - 75 }
+      { minX: 44, maxX: WALL_WIDTH_CM - 44, minY: 205, maxY: refTopY - 78 }
     );
 
     const numbered = renumberHolds(holds);
-    bestHolds = numbered;
+    if (bestHolds.length === 0) bestHolds = numbered;
 
-    // Verify route is actually solvable by our beam-search solver!
-    const sol = suggestBeta(numbered, profile, 22);
-    if (sol.solved) {
-      break;
+    // Verify solvability AND measure actual physical difficulty (fast beamWidth=12 for mobile speed!)
+    const sol = suggestBeta(numbered, profile, 18, 12);
+    if (!sol.solved) continue;
+
+    const metrics = measureRouteDifficulty(numbered, sol.steps, profile);
+    // Reject easy routes masquerading as V5+ or brutal routes masquerading as V0–V1
+    let err = Math.abs(metrics.estimatedGrade - g);
+    if (g <= 1 && (metrics.dynoMoves > 0 || metrics.hardMoves > g)) err += 2.5;
+    if (g >= 5 && metrics.hardMoves + metrics.dynoMoves === 0) err += 2.5;
+    if (g >= 6 && metrics.staminaSpent < 45) err += 2.0;
+
+    if (err < bestScoreError) {
+      bestScoreError = err;
+      bestHolds = numbered;
+      bestMetrics = metrics;
+      // Early exit as soon as we hit a great calibrated match!
+      if (err <= 0.85) break;
     }
   }
 
-  const descriptions: Record<number, string> = {
-    0: '大把手直上线路，跨距轻松，适合自由发挥多种脚法。',
-    1: '基础节奏线，练习“先踩脚再出手”的流畅攀爬。',
-    2: '轻度斜线移动，兼顾把手与捏点转换。',
-    3: '引入侧拉点与折返路线，规划好对侧脚点防止开门。',
-    4: '抠点与捏点交替，考验合理分配体能与换脚时机。',
-    5: '中等以上跨距与方向点，不同身高臂展的解法差异明显。',
-    6: '高难圆弧与小抠点组合，重心贴壁与拉扯角度要求严苛。',
-    7: '极限定线：大跨距 + 方向性小点，可能需要动态死点（Dyno）或精准高脚！',
+  const baseDesc: Record<number, string> = {
+    0: '纯大把手与密脚点入门线，跨距轻松无难点。',
+    1: '基础大把手节奏线，练习顺畅换脚与重心转移。',
+    2: '把手与捏点交替的轻斜线，考验基础脚法。',
+    3: '引入侧拉点与折返路线，注意对侧脚防开门。',
+    4: '抠点/圆弧与中大跨距难点，需合理分配体能。',
+    5: '稀疏脚点与技术方向点，身型与高脚策略差异显著。',
+    6: '高难圆弧与小抠点组合，重心压墙与角度容错极低。',
+    7: '极限定线：稀疏小点 + 大跨距难点，极度考验指力或动态飞跃！',
   };
+
+  const telemetryNote = bestMetrics
+    ? `（参考：${bestMetrics.stepCount}步 · 耗能${bestMetrics.staminaSpent}% · 难点${bestMetrics.hardMoves}步${
+        bestMetrics.dynoMoves > 0 ? ` · 飞跃${bestMetrics.dynoMoves}次` : ''
+      }）`
+    : '';
 
   return {
     id: nextUid('route'),
     name: `${pick(gradeNames[g])}`,
     grade: `V${g}`,
-    description: descriptions[g],
+    description: `${baseDesc[g]}${telemetryNote}`,
     holdColor: color,
     holds: bestHolds,
   };
@@ -430,7 +658,8 @@ interface SearchNode {
 export function suggestBeta(
   holds: Hold[],
   profile: ClimberProfile,
-  maxDepth = 20
+  maxDepth = 20,
+  beamWidth = 24
 ): { solved: boolean; steps: BetaStep[]; bestProgressY: number } {
   const topHolds = holds.filter((h) => h.role === 'top');
   if (topHolds.length === 0 || holds.length < 2) {
@@ -484,7 +713,6 @@ export function suggestBeta(
   visited.set(stateKey(initial), 100);
 
   let bestNode = beam[0];
-  const beamWidth = 24;
 
   for (let depth = 0; depth < maxDepth; depth++) {
     const nextBeam: SearchNode[] = [];

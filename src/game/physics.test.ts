@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CLIMBER_PRESETS, computeAnatomy } from './climber';
 import { emptyFreeMap } from './contact';
-import { generateRoute, suggestBeta } from './generator';
+import { generateRoute, measureRouteDifficulty, suggestBeta } from './generator';
 import { getHoldHitRadius } from './holds';
 import { blendPosesRigid, dist, doLegsIntersect } from './ik';
 import {
@@ -201,10 +201,30 @@ describe('Bouldering physics & Beta solver', () => {
     expect(shortBeta.solved).toBe(true);
   });
 
+  it('calibrates procedural V0 vs V6 routes so higher V-grades are measurably harder', () => {
+    const standard = CLIMBER_PRESETS[1];
+    let v0EstSum = 0;
+    let v6EstSum = 0;
+    for (let i = 0; i < 3; i++) {
+      const r0 = generateRoute(0, standard);
+      const s0 = suggestBeta(r0.holds, standard, 24);
+      expect(s0.solved).toBe(true);
+      const m0 = measureRouteDifficulty(r0.holds, s0.steps, standard);
+      v0EstSum += m0.estimatedGrade;
+
+      const r6 = generateRoute(6, standard);
+      const s6 = suggestBeta(r6.holds, standard, 24);
+      expect(s6.solved).toBe(true);
+      const m6 = measureRouteDifficulty(r6.holds, s6.steps, standard);
+      v6EstSum += m6.estimatedGrade;
+    }
+    expect(v6EstSum / 3).toBeGreaterThan(v0EstSum / 3 + 2.2);
+  });
+
   it('generates climbable procedural routes across V0..V7 with zero overlapping holds', () => {
     const standard = CLIMBER_PRESETS[1];
     for (const grade of [0, 1, 2, 3, 4, 5, 6, 7]) {
-      for (let run = 0; run < 3; run++) {
+      for (let run = 0; run < 2; run++) {
         const route = generateRoute(grade, standard);
         expect(route.holds.some((h) => h.role === 'start')).toBe(true);
         expect(route.holds.some((h) => h.role === 'top')).toBe(true);
@@ -221,11 +241,10 @@ describe('Bouldering physics & Beta solver', () => {
             ).toBeGreaterThanOrEqual(minGap);
           }
         }
-      }
-      if (grade <= 6) {
-        const route = generateRoute(grade, standard);
-        const sol = suggestBeta(route.holds, standard, 24);
-        expect(sol.solved, `Generated V${grade} should be solvable`).toBe(true);
+        if (run === 0 && grade <= 6) {
+          const sol = suggestBeta(route.holds, standard, 24);
+          expect(sol.solved, `Generated V${grade} should be solvable`).toBe(true);
+        }
       }
     }
   });

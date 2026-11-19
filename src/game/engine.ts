@@ -350,7 +350,8 @@ export class BoulderEngine {
   }
 
   public generateNewRoute(gradeNum: number): void {
-    const route = generateRoute(gradeNum, this.profile);
+    // Calibrate V-grade objectively against standard 172cm reference climber
+    const route = generateRoute(gradeNum);
     this.loadRoute(route, false);
     this.mode = 'plan';
     this.recomputeBeta();
