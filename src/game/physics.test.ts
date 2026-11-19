@@ -144,6 +144,17 @@ describe('Bouldering physics & Beta solver', () => {
     );
     expect(noFeetDyno.feasible).toBe(false);
 
+    // Superhuman jump directly from start holds to the TOP hold (y=398, >200cm above feet!) must FAIL
+    const superhumanDyno = evaluateMove(
+      init,
+      emptyFreeMap(),
+      'rh',
+      { kind: 'dyno', holdId: 'vd-top', bothHands: true },
+      dynoRoute.holds,
+      standard
+    );
+    expect(superhumanDyno.feasible).toBe(false);
+
     // AI Beta solver should solve V4 Dyno Canyon using Dyno!
     const sol = suggestBeta(dynoRoute.holds, standard, 24);
     expect(sol.solved).toBe(true);

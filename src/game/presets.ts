@@ -69,8 +69,8 @@ export const PRESET_ROUTES: RouteProblem[] = [
       makeHold('vd-f2', 194, 62, 'foothold', 'normal', 0, 1.15, '#6B4E9B'),
       makeHold('vd-s1', 128, 134, 'jug', 'start', -12, 1.2, '#6B4E9B'),
       makeHold('vd-s2', 186, 138, 'jug', 'start', 12, 1.2, '#6B4E9B'),
-      // Mid-wall catch jug after a dramatic diagonal Dyno gap!
-      makeHold('vd-catch', 262, 266, 'jug', 'normal', 10, 1.32, '#6B4E9B'),
+      // Mid-wall catch jug after a realistic human diagonal Dyno gap!
+      makeHold('vd-catch', 240, 256, 'jug', 'normal', 10, 1.32, '#6B4E9B'),
       // Recovery footholds below the catch jug after cutting feet
       makeHold('vd-f3', 214, 152, 'foothold', 'normal', 0, 1.1, '#6B4E9B'),
       makeHold('vd-f4', 286, 168, 'foothold', 'normal', 0, 1.1, '#6B4E9B'),

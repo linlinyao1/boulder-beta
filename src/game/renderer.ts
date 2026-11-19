@@ -1,7 +1,7 @@
 import { computeAnatomy } from './climber';
 import { getHoldHitRadius, getHoldOptimalPullDir, LIMB_META } from './holds';
 import { clamp, lerp, lerpVec } from './ik';
-import { BetaTraceStep } from './physics';
+import { BetaTraceStep, getDynoEnvelope } from './physics';
 import {
   BetaStep,
   ClimberProfile,
@@ -341,15 +341,26 @@ function drawReachArc(ctx: CanvasRenderingContext2D, tr: WallTransform, state: R
 
   if (isDynoMode) {
     const isDouble = state.planContactMode === 'doubleDyno';
-    const launchCenter = worldToScreen(
-      { x: state.pose.chest.x, y: state.pose.chest.y + 18 },
-      tr
+    const otherHand: LimbId = limb === 'lh' ? 'rh' : 'lh';
+    const env = getDynoEnvelope(
+      state.assignment,
+      state.freeLimbs ?? emptyFreeMap(),
+      state.holds,
+      state.profile,
+      isDouble,
+      isDouble ? undefined : otherHand
     );
-    const jumpPx = anatomy.maxArmReach * (isDouble ? 2.08 : 1.78) * tr.scale;
+    if (!env.canLaunch) return;
+
+    const launchCenter = worldToScreen(env.launchOrigin, tr);
+    const rx = env.maxLatReach * tr.scale;
+    const ry = env.maxUpReach * tr.scale;
 
     ctx.save();
     ctx.beginPath();
-    ctx.arc(launchCenter.x, launchCenter.y, jumpPx, 0, Math.PI * 2);
+    ctx.ellipse(launchCenter.x, launchCenter.y, rx, ry, 0, Math.PI, Math.PI * 2);
+    ctx.ellipse(launchCenter.x, launchCenter.y, rx, ry * 0.65, 0, 0, Math.PI);
+    ctx.closePath();
     ctx.fillStyle = 'rgba(217, 119, 6, 0.08)';
     ctx.fill();
     ctx.strokeStyle = 'rgba(217, 119, 6, 0.78)';
