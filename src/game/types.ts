@@ -28,7 +28,7 @@ export interface Hold {
 
 export interface ClimberProfile {
   name: string;
-  heightCm: number; // 145..205
+  heightCm: number; // 140..205
   apeIndexCm: number; // -10..+16 (wingspan = height + apeIndex)
   gripStrength: number; // 60..120
   flexibility: number; // 60..120

@@ -91,7 +91,7 @@ app.innerHTML = `
                   <span>身高 (Height)</span>
                   <span id="val-height" class="slider-val">172 cm</span>
                 </div>
-                <input id="sl-height" type="range" min="145" max="205" step="1" value="172" />
+                <input id="sl-height" type="range" min="140" max="205" step="1" value="172" />
               </label>
 
               <label class="slider-row">

@@ -29,6 +29,13 @@ export const CLIMBER_PRESETS: ClimberProfile[] = [
     gripStrength: 114,
     flexibility: 78,
   },
+  {
+    name: '小学生小岩羊',
+    heightCm: 142,
+    apeIndexCm: 0,
+    gripStrength: 86,
+    flexibility: 118,
+  },
 ];
 
 export function computeAnatomy(profile: ClimberProfile): ClimberAnatomy {
