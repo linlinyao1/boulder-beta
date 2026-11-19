@@ -100,6 +100,7 @@ export interface EngineSnapshot {
   climbBalance: number;
   playbackSpeed: number;
   climbResult: ClimbResult | null;
+  cameraZoom: number;
 }
 
 interface ClimbAnimState {
@@ -141,6 +142,25 @@ export class BoulderEngine {
   private timeSec = 0;
   private transform: WallTransform = computeWallTransform(800, 700);
   private resizeObserver: ResizeObserver | null = null;
+  private cameraZoom = 1.0;
+  private cameraPanX = 0;
+  private cameraPanY = 0;
+
+  // Multi-touch pinch & pan gesture state
+  private activePointers = new Map<number, Vec2>();
+  private isPinching = false;
+  private pinchPrevDist = 0;
+  private pinchPrevMid: Vec2 = { x: 0, y: 0 };
+  private pinchJustEnded = false;
+  private dragStartPos: Vec2 | null = null;
+  private dragOrigHoldPos: Vec2 | null = null;
+  private isPanning = false;
+  private panLastScreen: Vec2 = { x: 0, y: 0 };
+  private pendingTap: {
+    pointerId: number;
+    screen: Vec2;
+    isTouch: boolean;
+  } | null = null;
 
   // Core game state
   private mode: GameMode = 'plan';
@@ -235,7 +255,59 @@ export class BoulderEngine {
     this.canvas.width = Math.max(240, Math.floor(rect.width * dpr));
     this.canvas.height = Math.max(240, Math.floor(rect.height * dpr));
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.transform = computeWallTransform(rect.width, rect.height);
+    this.clampCamera(rect.width, rect.height);
+    this.transform = computeWallTransform(rect.width, rect.height, {
+      zoom: this.cameraZoom,
+      panX: this.cameraPanX,
+      panY: this.cameraPanY,
+    });
+  }
+
+  public resetCamera(): void {
+    this.cameraZoom = 1.0;
+    this.cameraPanX = 0;
+    this.cameraPanY = 0;
+    this.resize();
+    this.emit();
+  }
+
+  private clampCamera(canvasW: number, canvasH: number): void {
+    this.cameraZoom = clamp(this.cameraZoom, 1.0, 3.2);
+    if (this.cameraZoom <= 1.01) {
+      this.cameraZoom = 1.0;
+      this.cameraPanX = 0;
+      this.cameraPanY = 0;
+      return;
+    }
+    const base = computeWallTransform(canvasW, canvasH);
+    const maxPanX = Math.max(40, (base.wallPixelW * (this.cameraZoom - 1)) / 2 + 48);
+    const maxPanY = Math.max(40, ((base.wallPixelH + base.padPixelH) * (this.cameraZoom - 1)) / 2 + 56);
+    this.cameraPanX = clamp(this.cameraPanX, -maxPanX, maxPanX);
+    this.cameraPanY = clamp(this.cameraPanY, -maxPanY, maxPanY);
+  }
+
+  private zoomAroundScreenPoint(screenPt: Vec2, nextZoomRaw: number, panDeltaX = 0, panDeltaY = 0): void {
+    const rect = this.canvas.getBoundingClientRect();
+    const oldZoom = this.cameraZoom;
+    const nextZoom = clamp(nextZoomRaw, 1.0, 3.2);
+
+    // Keep the world point under `screenPt` anchored while zooming + applying optional midpoint pan!
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const ratio = nextZoom / oldZoom;
+
+    this.cameraPanX =
+      (screenPt.x - cx) * (1 - ratio) + this.cameraPanX * ratio + panDeltaX;
+    this.cameraPanY =
+      (screenPt.y - cy) * (1 - ratio) + this.cameraPanY * ratio + panDeltaY;
+    this.cameraZoom = nextZoom;
+
+    this.clampCamera(rect.width, rect.height);
+    this.transform = computeWallTransform(rect.width, rect.height, {
+      zoom: this.cameraZoom,
+      panX: this.cameraPanX,
+      panY: this.cameraPanY,
+    });
   }
 
   // ==================== PUBLIC ACTIONS ====================
@@ -261,6 +333,9 @@ export class BoulderEngine {
 
   public loadRoute(route: RouteProblem, emitChange = true): void {
     this.stopClimbInternal();
+    this.cameraZoom = 1.0;
+    this.cameraPanX = 0;
+    this.cameraPanY = 0;
     this.routeName = route.name;
     this.routeGrade = route.grade;
     this.routeDescription = route.description;
@@ -1201,6 +1276,11 @@ export class BoulderEngine {
     }
 
     this.transform = renderScene(this.ctx, rect.width, rect.height, {
+      camera: {
+        zoom: this.cameraZoom,
+        panX: this.cameraPanX,
+        panY: this.cameraPanY,
+      },
       mode: this.mode,
       holds: this.holds,
       profile: this.profile,
@@ -1241,18 +1321,24 @@ export class BoulderEngine {
 
   // ==================== POINTER INTERACTIONS ====================
 
-  private getPointerWorld(e: MouseEvent): Vec2 {
+  private getPointerScreen(e: MouseEvent): Vec2 {
     const rect = this.canvas.getBoundingClientRect();
-    return screenToWorld({ x: e.clientX - rect.left, y: e.clientY - rect.top }, this.transform);
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  private getPointerWorld(e: MouseEvent): Vec2 {
+    return screenToWorld(this.getPointerScreen(e), this.transform);
   }
 
   private hitTestHold(worldPt: Vec2, isTouch = false): Hold | null {
     let best: Hold | null = null;
     let bestDist = Infinity;
+    const touchBase = Math.max(13, 22 / Math.sqrt(this.cameraZoom));
+    const touchPad = Math.max(5, 12 / Math.sqrt(this.cameraZoom));
     for (let i = this.holds.length - 1; i >= 0; i--) {
       const h = this.holds[i];
       const hitR = isTouch
-        ? Math.max(22, getHoldHitRadius(h) + 12)
+        ? Math.max(touchBase, getHoldHitRadius(h) + touchPad)
         : Math.max(13, getHoldHitRadius(h) + 5);
       const d = dist(worldPt, h);
       if (d <= hitR && d < bestDist) {
@@ -1263,81 +1349,183 @@ export class BoulderEngine {
     return best;
   }
 
+  private commitTapAt(screenPt: Vec2, isTouch: boolean): void {
+    const wp = screenToWorld(screenPt, this.transform);
+    const hit = this.hitTestHold(wp, isTouch);
+
+    if (this.mode === 'setter') {
+      if (hit) {
+        this.selectedHoldId = hit.id;
+        this.emit();
+      } else if (wp.x >= 12 && wp.x <= WALL_WIDTH_CM - 12 && wp.y >= 16 && wp.y <= WALL_HEIGHT_CM - 16) {
+        const newHold: Hold = {
+          id: nextUid('h'),
+          label: this.holds.length + 1,
+          x: Math.round(wp.x),
+          y: Math.round(wp.y),
+          type: this.brush.type,
+          role: this.brush.role,
+          angle: this.brush.angle,
+          scale: this.brush.scale,
+          color: this.brush.type === 'volume' ? '#3D434C' : this.brush.color,
+        };
+        this.holds = renumberHolds([...this.holds, newHold]);
+        this.selectedHoldId = newHold.id;
+        this.recomputeBeta();
+        this.emit();
+      } else {
+        this.selectedHoldId = null;
+        this.emit();
+      }
+    } else if (this.mode === 'plan') {
+      if (hit) {
+        if (this.planContactMode === 'dyno') {
+          this.addBetaTarget(dynoTarget(hit.id, false));
+        } else if (this.planContactMode === 'doubleDyno') {
+          this.addBetaTarget(dynoTarget(hit.id, true));
+        } else {
+          this.addBetaTarget(holdTarget(hit.id));
+        }
+      } else if (
+        (this.planContactMode === 'smear' || this.planContactMode === 'flag') &&
+        wp.x >= 12 &&
+        wp.x <= WALL_WIDTH_CM - 12 &&
+        wp.y >= 16 &&
+        wp.y <= WALL_HEIGHT_CM - 16
+      ) {
+        const x = Math.round(wp.x);
+        const y = Math.round(wp.y);
+        this.addBetaTarget(
+          this.planContactMode === 'smear' ? smearTarget(x, y) : flagTarget(x, y)
+        );
+      }
+    }
+  }
+
   private bindEvents(): void {
     this.canvas.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 && e.pointerType !== 'touch') return;
-      const wp = this.getPointerWorld(e);
-      const hit = this.hitTestHold(wp, e.pointerType === 'touch');
+      const sp = this.getPointerScreen(e);
+      this.activePointers.set(e.pointerId, sp);
 
-      if (this.mode === 'setter') {
-        if (hit) {
-          this.selectedHoldId = hit.id;
-          this.draggingHoldId = hit.id;
-          this.dragOffset = { x: hit.x - wp.x, y: hit.y - wp.y };
-          this.dragMoved = false;
-          this.canvas.setPointerCapture(e.pointerId);
-          this.emit();
-        } else if (wp.x >= 12 && wp.x <= WALL_WIDTH_CM - 12 && wp.y >= 16 && wp.y <= WALL_HEIGHT_CM - 16) {
-          // Place a new hold
-          const newHold: Hold = {
-            id: nextUid('h'),
-            label: this.holds.length + 1,
-            x: Math.round(wp.x),
-            y: Math.round(wp.y),
-            type: this.brush.type,
-            role: this.brush.role,
-            angle: this.brush.angle,
-            scale: this.brush.scale,
-            color: this.brush.type === 'volume' ? '#3D434C' : this.brush.color,
-          };
-          this.holds = renumberHolds([...this.holds, newHold]);
-          this.selectedHoldId = newHold.id;
-          this.recomputeBeta();
-          this.emit();
-        } else {
-          this.selectedHoldId = null;
-          this.emit();
+      // 2 fingers -> begin pinch-to-zoom & pan immediately, canceling any pending tap or hold drag!
+      if (this.activePointers.size === 2) {
+        const pts = [...this.activePointers.values()];
+        this.isPinching = true;
+        this.pinchJustEnded = false;
+        this.pendingTap = null;
+        this.isPanning = false;
+        if (this.draggingHoldId && this.dragOrigHoldPos) {
+          const orig = this.dragOrigHoldPos;
+          const hid = this.draggingHoldId;
+          this.holds = this.holds.map((h) => (h.id === hid ? { ...h, x: orig.x, y: orig.y } : h));
+          this.draggingHoldId = null;
+          this.dragOrigHoldPos = null;
         }
-      } else if (this.mode === 'plan') {
-        if (hit) {
-          if (this.planContactMode === 'dyno') {
-            this.addBetaTarget(dynoTarget(hit.id, false));
-          } else if (this.planContactMode === 'doubleDyno') {
-            this.addBetaTarget(dynoTarget(hit.id, true));
-          } else {
-            this.addBetaTarget(holdTarget(hit.id));
-          }
-        } else if (
-          (this.planContactMode === 'smear' || this.planContactMode === 'flag') &&
-          wp.x >= 12 &&
-          wp.x <= WALL_WIDTH_CM - 12 &&
-          wp.y >= 16 &&
-          wp.y <= WALL_HEIGHT_CM - 16
-        ) {
-          const x = Math.round(wp.x);
-          const y = Math.round(wp.y);
-          this.addBetaTarget(
-            this.planContactMode === 'smear' ? smearTarget(x, y) : flagTarget(x, y)
-          );
-        }
-      }
-    });
-
-    this.canvas.addEventListener('pointermove', (e) => {
-      const wp = this.getPointerWorld(e);
-
-      if (this.mode === 'setter' && this.draggingHoldId) {
-        const nx = clamp(Math.round(wp.x + this.dragOffset.x), 18, WALL_WIDTH_CM - 18);
-        const ny = clamp(Math.round(wp.y + this.dragOffset.y), 18, WALL_HEIGHT_CM - 18);
-        this.holds = this.holds.map((h) =>
-          h.id === this.draggingHoldId ? { ...h, x: nx, y: ny } : h
-        );
-        this.dragMoved = true;
-        this.canvas.style.cursor = 'grabbing';
+        this.pinchPrevDist = Math.max(10, dist(pts[0], pts[1]));
+        this.pinchPrevMid = {
+          x: (pts[0].x + pts[1].x) / 2,
+          y: (pts[0].y + pts[1].y) / 2,
+        };
         return;
       }
 
-      const hit = this.hitTestHold(wp);
+      if (this.activePointers.size > 2) return;
+
+      const isTouch = e.pointerType === 'touch';
+      const wp = screenToWorld(sp, this.transform);
+      const hit = this.hitTestHold(wp, isTouch);
+
+      try {
+        this.canvas.setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore if pointer capture isn't supported
+      }
+
+      if (this.mode === 'setter' && hit) {
+        this.selectedHoldId = hit.id;
+        this.draggingHoldId = hit.id;
+        this.dragOffset = { x: hit.x - wp.x, y: hit.y - wp.y };
+        this.dragStartPos = sp;
+        this.dragOrigHoldPos = { x: hit.x, y: hit.y };
+        this.dragMoved = false;
+        this.pendingTap = null;
+        this.emit();
+        return;
+      }
+
+      // Defer tap until pointerup so pinch or zoomed-pan never fires accidental holds/steps
+      this.pendingTap = { pointerId: e.pointerId, screen: sp, isTouch };
+      this.panLastScreen = sp;
+      this.isPanning = false;
+    });
+
+    this.canvas.addEventListener('pointermove', (e) => {
+      const sp = this.getPointerScreen(e);
+      if (this.activePointers.has(e.pointerId)) {
+        this.activePointers.set(e.pointerId, sp);
+      }
+
+      // Pinch-to-zoom + 2-finger pan
+      if (this.isPinching && this.activePointers.size >= 2) {
+        const pts = [...this.activePointers.values()];
+        const curDist = Math.max(10, dist(pts[0], pts[1]));
+        const curMid: Vec2 = {
+          x: (pts[0].x + pts[1].x) / 2,
+          y: (pts[0].y + pts[1].y) / 2,
+        };
+        const scaleRatio = curDist / Math.max(10, this.pinchPrevDist);
+        const dx = curMid.x - this.pinchPrevMid.x;
+        const dy = curMid.y - this.pinchPrevMid.y;
+
+        this.zoomAroundScreenPoint(curMid, this.cameraZoom * scaleRatio, dx, dy);
+        this.pinchPrevDist = curDist;
+        this.pinchPrevMid = curMid;
+        this.emit();
+        return;
+      }
+
+      // Single-finger drag on a hold in Setter mode
+      if (this.mode === 'setter' && this.draggingHoldId) {
+        if (!this.dragStartPos || dist(sp, this.dragStartPos) > 4) {
+          const wp = screenToWorld(sp, this.transform);
+          const nx = clamp(Math.round(wp.x + this.dragOffset.x), 18, WALL_WIDTH_CM - 18);
+          const ny = clamp(Math.round(wp.y + this.dragOffset.y), 18, WALL_HEIGHT_CM - 18);
+          this.holds = this.holds.map((h) =>
+            h.id === this.draggingHoldId ? { ...h, x: nx, y: ny } : h
+          );
+          this.dragMoved = true;
+          this.canvas.style.cursor = 'grabbing';
+        }
+        return;
+      }
+
+      // Single-finger pan when zoomed in
+      if (this.pendingTap && this.pendingTap.pointerId === e.pointerId && this.cameraZoom > 1.03) {
+        if (!this.isPanning && dist(sp, this.pendingTap.screen) >= 9) {
+          this.isPanning = true;
+          this.panLastScreen = sp;
+        }
+        if (this.isPanning) {
+          const rect = this.canvas.getBoundingClientRect();
+          this.cameraPanX += sp.x - this.panLastScreen.x;
+          this.cameraPanY += sp.y - this.panLastScreen.y;
+          this.panLastScreen = sp;
+          this.clampCamera(rect.width, rect.height);
+          this.transform = computeWallTransform(rect.width, rect.height, {
+            zoom: this.cameraZoom,
+            panX: this.cameraPanX,
+            panY: this.cameraPanY,
+          });
+          this.canvas.style.cursor = 'grabbing';
+          return;
+        }
+      }
+
+      // Hover feedback for mouse pointers
+      if (e.pointerType === 'touch') return;
+      const wp = screenToWorld(sp, this.transform);
+      const hit = this.hitTestHold(wp, false);
       const nextHover = hit ? hit.id : null;
       let changed = false;
       if (nextHover !== this.hoveredHoldId) {
@@ -1380,13 +1568,33 @@ export class BoulderEngine {
         this.canvas.style.cursor = hit ? 'grab' : 'crosshair';
       } else if (this.mode === 'plan') {
         this.canvas.style.cursor =
-          hit || this.planContactMode !== 'hold' ? 'pointer' : 'default';
+          hit || this.planContactMode !== 'hold' ? 'pointer' : this.cameraZoom > 1.03 ? 'grab' : 'default';
       } else {
-        this.canvas.style.cursor = 'default';
+        this.canvas.style.cursor = this.cameraZoom > 1.03 ? 'grab' : 'default';
       }
     });
 
-    this.canvas.addEventListener('pointerup', (e) => {
+    const endPointer = (e: PointerEvent) => {
+      const sp = this.getPointerScreen(e);
+      this.activePointers.delete(e.pointerId);
+
+      if (this.isPinching) {
+        if (this.activePointers.size < 2) {
+          this.isPinching = false;
+          this.pinchJustEnded = true;
+          this.emit();
+        }
+        if (this.activePointers.size === 0) {
+          this.pinchJustEnded = false;
+        }
+        return;
+      }
+
+      if (this.pinchJustEnded) {
+        if (this.activePointers.size === 0) this.pinchJustEnded = false;
+        return;
+      }
+
       if (this.draggingHoldId) {
         if (this.dragMoved) {
           this.holds = renumberHolds(this.holds);
@@ -1394,10 +1602,48 @@ export class BoulderEngine {
           this.syncPlanPose(false);
         }
         this.draggingHoldId = null;
-        this.canvas.releasePointerCapture(e.pointerId);
+        this.dragStartPos = null;
+        this.dragOrigHoldPos = null;
+        try {
+          this.canvas.releasePointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
         this.emit();
+        return;
       }
-    });
+
+      if (this.pendingTap && this.pendingTap.pointerId === e.pointerId) {
+        const tap = this.pendingTap;
+        this.pendingTap = null;
+        const wasPanning = this.isPanning;
+        this.isPanning = false;
+        try {
+          this.canvas.releasePointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
+        if (!wasPanning && dist(sp, tap.screen) < 12) {
+          this.commitTapAt(sp, tap.isTouch);
+        }
+      }
+    };
+
+    this.canvas.addEventListener('pointerup', endPointer);
+    this.canvas.addEventListener('pointercancel', endPointer);
+
+    // Wheel & trackpad pinch-to-zoom support
+    this.canvas.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        const sp = this.getPointerScreen(e);
+        const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0022));
+        this.zoomAroundScreenPoint(sp, this.cameraZoom * factor);
+        this.emit();
+      },
+      { passive: false }
+    );
 
     this.canvas.addEventListener('dblclick', (e) => {
       if (this.mode !== 'setter') return;
@@ -1456,6 +1702,7 @@ export class BoulderEngine {
       climbBalance: this.climbBalance,
       playbackSpeed: this.playbackSpeed,
       climbResult: this.climbResult,
+      cameraZoom: this.cameraZoom,
     });
   }
 }

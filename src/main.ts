@@ -64,6 +64,7 @@ app.innerHTML = `
         <div id="ui-stage-top-dock" class="stage-top-dock"></div>
         <div class="canvas-container">
           <canvas id="wall-canvas"></canvas>
+          <button id="ui-zoom-reset" class="zoom-reset-pill hidden" title="点击复位缩放">1.0× 复位</button>
         </div>
         <div id="ui-stage-bottom-pill" class="stage-bottom-pill hidden"></div>
         <div id="ui-result-overlay" class="result-overlay" style="display:none;"></div>
@@ -183,6 +184,7 @@ const stageBottomPill = document.querySelector<HTMLDivElement>('#ui-stage-bottom
 const resultOverlay = document.querySelector<HTMLDivElement>('#ui-result-overlay')!;
 const modePanel = document.querySelector<HTMLElement>('#ui-mode-panel')!;
 const mobilePad = document.querySelector<HTMLDivElement>('#ui-mobile-pad')!;
+const zoomResetBtn = document.querySelector<HTMLButtonElement>('#ui-zoom-reset')!;
 const sidebarEl = document.querySelector<HTMLElement>('#ui-sidebar')!;
 const sheetBackdrop = document.querySelector<HTMLDivElement>('#ui-sheet-backdrop')!;
 const mbRouteBtn = document.querySelector<HTMLButtonElement>('#mb-route-btn')!;
@@ -270,6 +272,7 @@ clearWallBtn.addEventListener('click', () => {
 });
 
 mbRouteBtn.addEventListener('click', () => setMobileSheet(mobileSheet === 'route' ? 'none' : 'route'));
+zoomResetBtn.addEventListener('click', () => engine.resetCamera());
 mbBodyBtn.addEventListener('click', () => setMobileSheet(mobileSheet === 'body' ? 'none' : 'body'));
 mbSheetClose.addEventListener('click', () => setMobileSheet('none'));
 sheetBackdrop.addEventListener('click', () => setMobileSheet('none'));
@@ -414,6 +417,12 @@ function syncUI(snap: EngineSnapshot): void {
   renderMobilePad(snap);
   mbRouteBtn.textContent = `${snap.routeGrade} ▾`;
   mbBodyBtn.textContent = `${snap.profile.heightCm}cm`;
+  if (snap.cameraZoom > 1.04) {
+    zoomResetBtn.classList.remove('hidden');
+    zoomResetBtn.textContent = `${snap.cameraZoom.toFixed(1)}× 复位`;
+  } else {
+    zoomResetBtn.classList.add('hidden');
+  }
   const activeId = document.activeElement?.id;
   if (activeId !== 'st-angle' && activeId !== 'st-scale') {
     renderModePanel(snap);

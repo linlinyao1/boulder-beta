@@ -32,6 +32,12 @@ export interface Particle {
   gravity: number;
 }
 
+export interface CameraView {
+  zoom: number; // 1.0 .. 3.2
+  panX: number; // screen px offset
+  panY: number; // screen px offset
+}
+
 export interface WallTransform {
   wallLeft: number;
   wallTop: number;
@@ -42,6 +48,7 @@ export interface WallTransform {
 }
 
 export interface RenderContextState {
+  camera?: CameraView;
   mode: GameMode;
   holds: Hold[];
   profile: ClimberProfile;
@@ -92,7 +99,11 @@ const WALL_FACETS: { pts: [number, number][]; fill: string }[] = [
   { pts: [[0.74, 0.61], [1, 0.66], [1, 1], [0.68, 1]], fill: '#D7C29F' },
 ];
 
-export function computeWallTransform(canvasW: number, canvasH: number): WallTransform {
+export function computeWallTransform(
+  canvasW: number,
+  canvasH: number,
+  camera?: CameraView
+): WallTransform {
   const padRatio = 0.085; // crash pad height as fraction of wall height
   const isCompact = canvasW <= 680;
   const marginX = isCompact ? 30 : 44;
@@ -103,14 +114,28 @@ export function computeWallTransform(canvasW: number, canvasH: number): WallTran
   const availH = Math.max(240, canvasH - marginTop - marginBottom);
 
   const totalUnitsH = WALL_HEIGHT_CM * (1 + padRatio);
-  const scale = Math.min(availW / WALL_WIDTH_CM, availH / totalUnitsH);
+  const baseScale = Math.min(availW / WALL_WIDTH_CM, availH / totalUnitsH);
 
-  const wallPixelW = WALL_WIDTH_CM * scale;
-  const wallPixelH = WALL_HEIGHT_CM * scale;
-  const padPixelH = wallPixelH * padRatio;
+  const baseW = WALL_WIDTH_CM * baseScale;
+  const baseH = WALL_HEIGHT_CM * baseScale;
+  const basePadH = baseH * padRatio;
 
-  const wallLeft = (canvasW - wallPixelW) / 2;
-  const wallTop = marginTop + (availH - wallPixelH - padPixelH) / 2;
+  const baseLeft = (canvasW - baseW) / 2;
+  const baseTop = marginTop + (availH - baseH - basePadH) / 2;
+
+  const zoom = camera ? clamp(camera.zoom, 1, 3.2) : 1;
+  const panX = camera ? camera.panX : 0;
+  const panY = camera ? camera.panY : 0;
+
+  const cx = canvasW / 2;
+  const cy = canvasH / 2;
+
+  const scale = baseScale * zoom;
+  const wallPixelW = baseW * zoom;
+  const wallPixelH = baseH * zoom;
+  const padPixelH = basePadH * zoom;
+  const wallLeft = cx + (baseLeft - cx) * zoom + panX;
+  const wallTop = cy + (baseTop - cy) * zoom + panY;
 
   return { wallLeft, wallTop, wallPixelW, wallPixelH, padPixelH, scale };
 }
@@ -144,7 +169,7 @@ export function renderScene(
   height: number,
   state: RenderContextState
 ): WallTransform {
-  const tr = computeWallTransform(width, height);
+  const tr = computeWallTransform(width, height, state.camera);
   ctx.clearRect(0, 0, width, height);
 
   // Studio concrete backdrop
