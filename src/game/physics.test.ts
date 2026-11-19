@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CLIMBER_PRESETS, computeAnatomy } from './climber';
 import { emptyFreeMap } from './contact';
 import { generateRoute, suggestBeta } from './generator';
+import { getHoldHitRadius } from './holds';
 import { blendPosesRigid, dist, doLegsIntersect } from './ik';
 import {
   evaluateBetaSequence,
@@ -165,14 +166,32 @@ describe('Bouldering physics & Beta solver', () => {
     expect(shortBeta.solved).toBe(true);
   });
 
-  it('generates climbable procedural routes across V0..V6', () => {
+  it('generates climbable procedural routes across V0..V7 with zero overlapping holds', () => {
     const standard = CLIMBER_PRESETS[1];
-    for (const grade of [0, 2, 4, 6]) {
-      const route = generateRoute(grade, standard);
-      expect(route.holds.some((h) => h.role === 'start')).toBe(true);
-      expect(route.holds.some((h) => h.role === 'top')).toBe(true);
-      const sol = suggestBeta(route.holds, standard, 24);
-      expect(sol.solved, `Generated V${grade} should be solvable`).toBe(true);
+    for (const grade of [0, 1, 2, 3, 4, 5, 6, 7]) {
+      for (let run = 0; run < 3; run++) {
+        const route = generateRoute(grade, standard);
+        expect(route.holds.some((h) => h.role === 'start')).toBe(true);
+        expect(route.holds.some((h) => h.role === 'top')).toBe(true);
+
+        // Verify every pair of holds maintains strict visual & hit-radius separation
+        for (let i = 0; i < route.holds.length; i++) {
+          for (let j = i + 1; j < route.holds.length; j++) {
+            const a = route.holds[i];
+            const b = route.holds[j];
+            const minGap = getHoldHitRadius(a) * 1.15 + getHoldHitRadius(b) * 1.15 + 10;
+            expect(
+              dist(a, b),
+              `Overlap on V${grade} between #${a.label} (${a.type}) and #${b.label} (${b.type})`
+            ).toBeGreaterThanOrEqual(minGap);
+          }
+        }
+      }
+      if (grade <= 6) {
+        const route = generateRoute(grade, standard);
+        const sol = suggestBeta(route.holds, standard, 24);
+        expect(sol.solved, `Generated V${grade} should be solvable`).toBe(true);
+      }
     }
   });
 });

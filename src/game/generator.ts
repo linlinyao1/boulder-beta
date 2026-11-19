@@ -1,5 +1,5 @@
 import { CLIMBER_PRESETS, computeAnatomy } from './climber';
-import { ALL_LIMBS, HOLD_COLORS, HOLD_SPECS, LIMB_META, renumberHolds } from './holds';
+import { ALL_LIMBS, getHoldHitRadius, HOLD_COLORS, HOLD_SPECS, LIMB_META, renumberHolds } from './holds';
 import { clamp, dist } from './ik';
 import { applyLimbTarget, dynoTarget, emptyFreeMap, holdTarget } from './contact';
 import { buildHoldMap, evaluateMove, getInitialAssignment, isTopReached } from './physics';
@@ -27,6 +27,62 @@ let uidCounter = 1;
 export function nextUid(prefix: string): string {
   uidCounter += 1;
   return `${prefix}-${Date.now().toString(36)}-${uidCounter}`;
+}
+
+/**
+ * Minimum center-to-center clearance (cm) so two holds (including shapes, tapes & badges) never overlap.
+ */
+function minHoldClearance(a: Hold, b: Hold): number {
+  return getHoldHitRadius(a) * 1.18 + getHoldHitRadius(b) * 1.18 + 12;
+}
+
+function hasOverlap(candidate: Hold, existing: Hold[]): boolean {
+  return existing.some((h) => dist(candidate, h) < minHoldClearance(candidate, h));
+}
+
+/**
+ * Places a hold cleanly without overlapping any existing hold on the wall.
+ * If the initial position collides, searches concentric rings nearby for the closest clear spot.
+ */
+function placeHoldWithoutOverlap(
+  holds: Hold[],
+  candidate: Hold,
+  required = true,
+  bounds: { minX?: number; maxX?: number; minY?: number; maxY?: number } = {}
+): Hold | null {
+  const minX = bounds.minX ?? 38;
+  const maxX = bounds.maxX ?? WALL_WIDTH_CM - 38;
+  const minY = bounds.minY ?? 32;
+  const maxY = bounds.maxY ?? 418;
+
+  const base: Hold = {
+    ...candidate,
+    x: Math.round(clamp(candidate.x, minX, maxX)),
+    y: Math.round(clamp(candidate.y, minY, maxY)),
+  };
+
+  if (!hasOverlap(base, holds)) {
+    holds.push(base);
+    return base;
+  }
+
+  // Try concentric rings around desired spot to nudge hold into nearest clear space
+  const radii = required ? [14, 24, 34, 46, 58] : [14, 24, 34];
+  const angles = 12;
+  for (const r of radii) {
+    for (let k = 0; k < angles; k++) {
+      const ang = (k / angles) * Math.PI * 2 + (r * 0.13);
+      const nx = Math.round(clamp(base.x + Math.cos(ang) * r, minX, maxX));
+      const ny = Math.round(clamp(base.y + Math.sin(ang) * r, minY, maxY));
+      const trial: Hold = { ...base, x: nx, y: ny };
+      if (!hasOverlap(trial, holds)) {
+        holds.push(trial);
+        return trial;
+      }
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -81,66 +137,91 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
     const twoStarts = g <= 3 || Math.random() < 0.55;
 
     if (twoStarts) {
-      const gap = rand(46, 68);
-      holds.push({
-        id: nextUid('h'),
-        label: 0,
-        x: clamp(startX - gap / 2, 52, WALL_WIDTH_CM - 52),
-        y: startY,
-        type: g <= 2 ? 'jug' : pick(['jug', 'pinch']),
-        role: 'start',
-        angle: g <= 1 ? 0 : Math.round(rand(-20, 5)),
-        scale: g <= 2 ? 1.12 : 1.0,
-        color,
-      });
-      holds.push({
-        id: nextUid('h'),
-        label: 0,
-        x: clamp(startX + gap / 2, 52, WALL_WIDTH_CM - 52),
-        y: startY + rand(-8, 12),
-        type: g <= 2 ? 'jug' : pick(['jug', 'pinch', 'sloper']),
-        role: 'start',
-        angle: g <= 1 ? 0 : Math.round(rand(-5, 22)),
-        scale: g <= 2 ? 1.12 : 1.0,
-        color,
-      });
+      const gap = rand(52, 72);
+      placeHoldWithoutOverlap(
+        holds,
+        {
+          id: nextUid('h'),
+          label: 0,
+          x: clamp(startX - gap / 2, 52, WALL_WIDTH_CM - 52),
+          y: startY,
+          type: g <= 2 ? 'jug' : pick(['jug', 'pinch']),
+          role: 'start',
+          angle: g <= 1 ? 0 : Math.round(rand(-20, 5)),
+          scale: g <= 2 ? 1.12 : 1.0,
+          color,
+        },
+        true,
+        { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: 110, maxY: 155 }
+      );
+      placeHoldWithoutOverlap(
+        holds,
+        {
+          id: nextUid('h'),
+          label: 0,
+          x: clamp(startX + gap / 2, 52, WALL_WIDTH_CM - 52),
+          y: startY + rand(-8, 12),
+          type: g <= 2 ? 'jug' : pick(['jug', 'pinch', 'sloper']),
+          role: 'start',
+          angle: g <= 1 ? 0 : Math.round(rand(-5, 22)),
+          scale: g <= 2 ? 1.12 : 1.0,
+          color,
+        },
+        true,
+        { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: 110, maxY: 155 }
+      );
     } else {
-      holds.push({
-        id: nextUid('h'),
-        label: 0,
-        x: startX,
-        y: startY,
-        type: g <= 3 ? 'jug' : 'pinch',
-        role: 'start',
-        angle: 0,
-        scale: 1.1,
-        color,
-      });
+      placeHoldWithoutOverlap(
+        holds,
+        {
+          id: nextUid('h'),
+          label: 0,
+          x: startX,
+          y: startY,
+          type: g <= 3 ? 'jug' : 'pinch',
+          role: 'start',
+          angle: 0,
+          scale: 1.1,
+          color,
+        },
+        true,
+        { minX: 52, maxX: WALL_WIDTH_CM - 52, minY: 112, maxY: 150 }
+      );
     }
 
     // Starting footholds
-    holds.push({
-      id: nextUid('h'),
-      label: 0,
-      x: clamp(startX - rand(28, 52), 42, WALL_WIDTH_CM - 42),
-      y: rand(38, 56),
-      type: 'foothold',
-      role: 'normal',
-      angle: 0,
-      scale: g <= 2 ? 1.12 : 0.95,
-      color,
-    });
-    holds.push({
-      id: nextUid('h'),
-      label: 0,
-      x: clamp(startX + rand(28, 52), 42, WALL_WIDTH_CM - 42),
-      y: rand(44, 66),
-      type: 'foothold',
-      role: 'normal',
-      angle: 0,
-      scale: g <= 2 ? 1.12 : 0.95,
-      color,
-    });
+    placeHoldWithoutOverlap(
+      holds,
+      {
+        id: nextUid('h'),
+        label: 0,
+        x: clamp(startX - rand(30, 54), 42, WALL_WIDTH_CM - 42),
+        y: rand(38, 56),
+        type: 'foothold',
+        role: 'normal',
+        angle: 0,
+        scale: g <= 2 ? 1.12 : 0.95,
+        color,
+      },
+      true,
+      { minX: 38, maxX: WALL_WIDTH_CM - 38, minY: 32, maxY: 82 }
+    );
+    placeHoldWithoutOverlap(
+      holds,
+      {
+        id: nextUid('h'),
+        label: 0,
+        x: clamp(startX + rand(30, 54), 42, WALL_WIDTH_CM - 42),
+        y: rand(44, 66),
+        type: 'foothold',
+        role: 'normal',
+        angle: 0,
+        scale: g <= 2 ? 1.12 : 0.95,
+        color,
+      },
+      true,
+      { minX: 38, maxX: WALL_WIDTH_CM - 38, minY: 32, maxY: 86 }
+    );
 
     // Build upward zigzag hand progression + matching footholds
     let prevX = startX;
@@ -150,116 +231,158 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
     for (let i = 0; i < numMainHands; i++) {
       const progress = (i + 1) / (numMainHands + 1);
       const stepDy = rand(minStepDy, maxStepDy);
-      const targetY = clamp(prevY + stepDy, prevY + 34, 348);
+      const targetY = clamp(prevY + stepDy, prevY + 38, 344);
 
       // Zigzag or traverse laterally
       if (Math.random() < 0.72) dir *= -1;
-      let targetX = prevX + dir * rand(28, lateralSpread);
+      let targetX = prevX + dir * rand(32, lateralSpread);
       if (targetX < 62 || targetX > WALL_WIDTH_CM - 62) {
         dir *= -1;
-        targetX = clamp(prevX + dir * rand(32, lateralSpread * 0.85), 62, WALL_WIDTH_CM - 62);
+        targetX = clamp(prevX + dir * rand(34, lateralSpread * 0.85), 62, WALL_WIDTH_CM - 62);
       }
 
       const type = pick(handPools[g]);
-      // Sidepull angles make sense relative to movement direction!
       let angle = 0;
       if (g >= 2) {
         if (type === 'sloper') {
           angle = Math.round(rand(-18, 18));
         } else {
-          // Slight inward pull angle toward wall center / previous stance
           const bias = targetX > prevX ? 1 : -1;
           angle = Math.round(bias * rand(8, maxAngle));
         }
       }
 
-      holds.push({
-        id: nextUid('h'),
-        label: 0,
-        x: Math.round(targetX),
-        y: Math.round(targetY),
-        type,
-        role: 'normal',
-        angle,
-        scale: clamp(1.12 - g * 0.03 + rand(-0.06, 0.06), 0.84, 1.18),
-        color,
-      });
+      const placedHand = placeHoldWithoutOverlap(
+        holds,
+        {
+          id: nextUid('h'),
+          label: 0,
+          x: targetX,
+          y: targetY,
+          type,
+          role: 'normal',
+          angle,
+          scale: clamp(1.12 - g * 0.03 + rand(-0.06, 0.06), 0.84, 1.18),
+          color,
+        },
+        true,
+        { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: prevY + 28, maxY: 350 }
+      );
+      if (!placedHand) continue;
 
       // Add a helpful foothold below this move (or a charcoal volume occasionally on V2+)
-      const footY = clamp(targetY - rand(anatomy.heightCm * 0.42, anatomy.heightCm * 0.56), 72, targetY - 48);
-      const footX = clamp((prevX + targetX) / 2 + rand(-36, 36), 44, WALL_WIDTH_CM - 44);
+      const footY = clamp(
+        placedHand.y - rand(anatomy.heightCm * 0.42, anatomy.heightCm * 0.56),
+        74,
+        placedHand.y - 50
+      );
+      const footX = clamp((prevX + placedHand.x) / 2 + rand(-36, 36), 44, WALL_WIDTH_CM - 44);
       const useVolume = g >= 2 && i === 1 && Math.random() < 0.45;
-      holds.push({
-        id: nextUid('h'),
-        label: 0,
-        x: Math.round(footX),
-        y: Math.round(footY),
-        type: useVolume ? 'volume' : 'foothold',
-        role: 'normal',
-        angle: useVolume ? Math.round(rand(-14, 14)) : 0,
-        scale: useVolume ? 1.0 : clamp(1.06 - g * 0.025, 0.85, 1.12),
-        color: useVolume ? '#3D434C' : color,
-      });
+      const placedPrimaryFoot = placeHoldWithoutOverlap(
+        holds,
+        {
+          id: nextUid('h'),
+          label: 0,
+          x: footX,
+          y: footY,
+          type: useVolume ? 'volume' : 'foothold',
+          role: 'normal',
+          angle: useVolume ? Math.round(rand(-14, 14)) : 0,
+          scale: useVolume ? 1.0 : clamp(1.06 - g * 0.025, 0.85, 1.12),
+          color: useVolume ? '#3D434C' : color,
+        },
+        false,
+        { minX: 42, maxX: WALL_WIDTH_CM - 42, minY: 66, maxY: placedHand.y - 40 }
+      );
 
-      // For higher grades or intermediate pacing, add a subtle secondary foot on opposite side
-      if (progress < 0.85 && (g <= 4 || Math.random() < 0.6)) {
-        const oppFootX = clamp(
-          targetX - dir * rand(28, 62),
-          44,
-          WALL_WIDTH_CM - 44
-        );
-        const oppFootY = clamp(footY + rand(16, 44), 85, targetY - 38);
-        if (holds.every((h) => dist(h, { x: oppFootX, y: oppFootY }) > 32)) {
-          holds.push({
+      // If volume couldn't fit cleanly, fall back to a compact foothold
+      if (!placedPrimaryFoot && useVolume) {
+        placeHoldWithoutOverlap(
+          holds,
+          {
             id: nextUid('h'),
             label: 0,
-            x: Math.round(oppFootX),
-            y: Math.round(oppFootY),
+            x: footX,
+            y: footY,
+            type: 'foothold',
+            role: 'normal',
+            angle: 0,
+            scale: 0.96,
+            color,
+          },
+          false,
+          { minX: 42, maxX: WALL_WIDTH_CM - 42, minY: 66, maxY: placedHand.y - 40 }
+        );
+      }
+
+      // Optional secondary foothold on opposite side
+      if (progress < 0.85 && (g <= 4 || Math.random() < 0.6)) {
+        const oppFootX = clamp(placedHand.x - dir * rand(32, 66), 44, WALL_WIDTH_CM - 44);
+        const oppFootY = clamp(footY + rand(16, 44), 85, placedHand.y - 40);
+        placeHoldWithoutOverlap(
+          holds,
+          {
+            id: nextUid('h'),
+            label: 0,
+            x: oppFootX,
+            y: oppFootY,
             type: 'foothold',
             role: 'normal',
             angle: 0,
             scale: 0.94,
             color,
-          });
-        }
+          },
+          false,
+          { minX: 42, maxX: WALL_WIDTH_CM - 42, minY: 75, maxY: placedHand.y - 36 }
+        );
       }
 
-      prevX = targetX;
-      prevY = targetY;
-      if (prevY >= 332) break;
+      prevX = placedHand.x;
+      prevY = placedHand.y;
+      if (prevY >= 326) break;
     }
 
     // Top hold
     const topX = clamp(prevX + rand(-56, 56), 76, WALL_WIDTH_CM - 76);
-    const topY = clamp(Math.max(prevY + rand(44, 68), 372), 368, 412);
-    holds.push({
-      id: nextUid('h'),
-      label: 0,
-      x: Math.round(topX),
-      y: Math.round(topY),
-      type: g <= 5 ? 'jug' : pick(['jug', 'pinch', 'sloper']),
-      role: 'top',
-      angle: 0,
-      scale: g <= 3 ? 1.2 : 1.08,
-      color,
-    });
-
-    // High foothold to allow matching Top cleanly
-    const highFootX = clamp(topX + rand(-48, 48), 54, WALL_WIDTH_CM - 54);
-    const highFootY = clamp(topY - rand(105, 138), 220, 305);
-    if (holds.every((h) => dist(h, { x: highFootX, y: highFootY }) > 28)) {
-      holds.push({
+    const topY = clamp(Math.max(prevY + rand(48, 70), 374), 370, 412);
+    const placedTop = placeHoldWithoutOverlap(
+      holds,
+      {
         id: nextUid('h'),
         label: 0,
-        x: Math.round(highFootX),
-        y: Math.round(highFootY),
+        x: topX,
+        y: topY,
+        type: g <= 5 ? 'jug' : pick(['jug', 'pinch', 'sloper']),
+        role: 'top',
+        angle: 0,
+        scale: g <= 3 ? 1.2 : 1.08,
+        color,
+      },
+      true,
+      { minX: 60, maxX: WALL_WIDTH_CM - 60, minY: 362, maxY: 416 }
+    );
+
+    // High foothold to allow matching Top cleanly
+    const refTopX = placedTop?.x ?? topX;
+    const refTopY = placedTop?.y ?? topY;
+    const highFootX = clamp(refTopX + rand(-48, 48), 54, WALL_WIDTH_CM - 54);
+    const highFootY = clamp(refTopY - rand(105, 138), 220, 305);
+    placeHoldWithoutOverlap(
+      holds,
+      {
+        id: nextUid('h'),
+        label: 0,
+        x: highFootX,
+        y: highFootY,
         type: 'foothold',
         role: 'normal',
         angle: 0,
         scale: 0.96,
         color,
-      });
-    }
+      },
+      false,
+      { minX: 44, maxX: WALL_WIDTH_CM - 44, minY: 210, maxY: refTopY - 75 }
+    );
 
     const numbered = renumberHolds(holds);
     bestHolds = numbered;
