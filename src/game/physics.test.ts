@@ -161,6 +161,26 @@ describe('Bouldering physics & Beta solver', () => {
     expect(sol.steps.some((s) => s.target.kind === 'dyno')).toBe(true);
   });
 
+  it('allows micro-crimping a foothold with feet supported, while failing without feet or low strength-to-weight', () => {
+    const v1 = PRESET_ROUTES[0];
+    const standard = CLIMBER_PRESETS[1];
+    const init = getInitialAssignment(v1.holds, standard);
+
+    // Reach up from start stance to foothold v1-f4 (220, 168) with right hand while feet are supported
+    const microCrimp = evaluateHoldMove(init, 'rh', 'v1-f4', v1.holds, standard);
+    expect(microCrimp.feasible, microCrimp.failReason ?? 'supported micro-crimp should work').toBe(true);
+    expect(microCrimp.rating).toBe('hard');
+
+    // Campusing onto a foothold with zero feet must fail
+    const noFeetCrimp = evaluateHoldMove({ ...init, lf: null, rf: null }, 'rh', 'v1-f4', v1.holds, standard);
+    expect(noFeetCrimp.feasible).toBe(false);
+
+    // Heavy low-grip climber cannot hold a tiny foothold
+    const heavyWeak = { name: '重低握', heightCm: 198, apeIndexCm: 0, gripStrength: 66, flexibility: 80 };
+    const heavyTry = evaluateHoldMove(init, 'rh', 'v1-f4', v1.holds, heavyWeak);
+    expect(heavyTry.feasible).toBe(false);
+  });
+
   it('shows real anthropometric difference between short and long-wingspan climbers on V5 Morpho', () => {
     const morpho = PRESET_ROUTES.find((r) => r.id === 'preset-v5-morpho')!;
     const shortClimber = CLIMBER_PRESETS[0];

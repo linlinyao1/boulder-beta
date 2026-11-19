@@ -730,13 +730,40 @@ export function evaluateMove(
     staminaMult = spec.staminaMultiplier;
 
     if (isHand && targetHold.type === 'foothold') {
-      return failEval(nextPose, `#${targetHold.label} 是小脚点，手指无法抓稳`, {
-        reachRatio: effectiveReach,
-        reachExcessCm,
-        isDyno,
-        gripScore,
-        directionAlignment: alignment,
-      });
+      if (isDyno) {
+        return failEval(nextPose, `#${targetHold.label} 是微小脚点，动态冲击下手指无法抓停`, {
+          reachRatio: effectiveReach,
+          reachExcessCm,
+          isDyno: true,
+          gripScore,
+          directionAlignment: alignment,
+          staminaCost: 20,
+        });
+      }
+      if (remainingFeet.length === 0) {
+        return failEval(nextPose, `脚下缺少支撑，无法仅靠手抠 #${targetHold.label} 小脚点承受全身重量`, {
+          reachRatio: effectiveReach,
+          reachExcessCm,
+          gripScore,
+          directionAlignment: alignment,
+          staminaCost: 18,
+        });
+      }
+      if (alignment < 0.55) {
+        return failEval(
+          nextPose,
+          `#${targetHold.label} 小脚点边缘极浅，发力角度偏离 ${Math.round(alignInfo.angleDiffDeg)}° 会直接打滑`,
+          { reachRatio: effectiveReach, reachExcessCm, gripScore, directionAlignment: alignment, staminaCost: 16 }
+        );
+      }
+      if (gripScore < 28) {
+        return failEval(
+          nextPose,
+          `#${targetHold.label} 小脚点抓握面过小，当前指力/体重比难以抠稳（可减轻体重或提高指力）`,
+          { reachRatio: effectiveReach, reachExcessCm, gripScore, directionAlignment: alignment, staminaCost: 16 }
+        );
+      }
+      warnings.push(`微抠 #${targetHold.label} 小脚点过渡，指力消耗极大`);
     }
     if (isHand && alignment < 0.28) {
       return failEval(
