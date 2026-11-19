@@ -251,28 +251,41 @@ export function getDynoEnvelope(
   const avgFootY = footPts.reduce((s, p) => s + p.y, 0) / footPts.length;
 
   // Standing shoulder height at full leg extension (toe-off moment)
-  let toeOffShoulderY = avgFootY + anatomy.maxLegReach * 0.93 + anatomy.torsoLen;
+  let toeOffShoulderY = avgFootY + anatomy.maxLegReach * 0.9 + anatomy.torsoLen;
+
+  // CRITICAL real-world constraint: when launching off handholds, your shoulders at the moment
+  // of hand release cannot magically be far above the handholds you are pulling/pushing off!
+  const activeHands = supportingLimbs(assignment, free, ['lh', 'rh']);
+  const handPts = activeHands
+    .map((hl) => getLimbWorldPos(hl, assignment, free, holdMap))
+    .filter((p): p is Vec2 => Boolean(p));
+
+  if (handPts.length > 0) {
+    const maxHandY = Math.max(...handPts.map((p) => p.y));
+    // Pulling/pressing past the start holds before releasing lets shoulders reach ~20cm above holds at most
+    const releaseShoulderCap = maxHandY + (bothHands ? 20 : 12);
+    toeOffShoulderY = Math.min(toeOffShoulderY, releaseShoulderCap);
+  }
 
   // For single-hand Dyno, the staying hand physically caps how high the shoulder can rise!
   if (!bothHands && stayingHand) {
     const stayPos = getLimbWorldPos(stayingHand, assignment, free, holdMap);
     if (stayPos) {
-      toeOffShoulderY = Math.min(toeOffShoulderY, stayPos.y + anatomy.maxArmReach * 0.82);
+      toeOffShoulderY = Math.min(toeOffShoulderY, stayPos.y + anatomy.maxArmReach * 0.72);
     }
   }
 
-  // Realistic human vertical CoM jump rise off climbing holds after toe-off:
-  // Baseline 172cm adult on 2 solid footholds: ~34cm Double Dyno, ~20cm Single Dyno.
-  // Scales naturally with leg drive stroke (maxLegReach / 85) and modest power-to-weight factor.
-  const legStrokeScale = clamp(anatomy.maxLegReach / 85, 0.72, 1.18);
+  // Realistic human vertical CoM jump rise off climbing holds after release (no running start!):
+  // Baseline 172cm adult on 2 solid footholds: ~24cm Double Dyno, ~16cm Single Dyno.
+  const legStrokeScale = clamp(anatomy.maxLegReach / 85, 0.74, 1.14);
   const powerFactor = clamp(
     ((profile.gripStrength * 0.45 + profile.flexibility * 0.55) / 92) /
       Math.pow(anatomy.weightFactor, 0.22),
     0.84,
-    1.14
+    1.12
   );
 
-  const baseJumpRise = bothHands ? 34 : 20;
+  const baseJumpRise = bothHands ? 24 : 16;
   const maxJumpRiseCm = baseJumpRise * legStrokeScale * footImpulse * powerFactor;
 
   const launchOrigin: Vec2 = {
@@ -280,11 +293,11 @@ export function getDynoEnvelope(
     y: toeOffShoulderY,
   };
 
-  // Fingertip reach envelope relative to toe-off shoulder:
+  // Fingertip reach envelope relative to release shoulder:
   // Upward = arm length + airborne CoM rise
   // Lateral = arm length + realistic lateral push-off (limited by foot friction angle)
   const maxUpReach = anatomy.maxArmReach + maxJumpRiseCm;
-  const maxLatReach = anatomy.maxArmReach + maxJumpRiseCm * 1.1 + (bothHands ? 14 : 8);
+  const maxLatReach = anatomy.maxArmReach + maxJumpRiseCm * 0.85 + (bothHands ? 8 : 4);
 
   return {
     canLaunch: true,
@@ -622,7 +635,8 @@ export function evaluateMove(
   );
   const effectiveReach = Math.max(reachFromSupport, maxAnchorStretch);
   const staticLimit = isHand ? 1.035 : 1.045;
-  const dynoLimit = isHand && target.kind === 'hold' ? 1.21 : target.kind === 'hold' ? 1.045 : 1.02;
+  // Hold mode is static (only tiny deadpoint lunge up to 1.09); larger jumps use explicit Dyno (D / G)!
+  const dynoLimit = isHand && target.kind === 'hold' ? 1.09 : target.kind === 'hold' ? 1.045 : 1.02;
 
   const hasPushFoot = remainingFeet.some((fl) => {
     const p = supportPointPos(fl, support.assignment, support.free, holdMap);

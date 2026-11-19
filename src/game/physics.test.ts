@@ -144,16 +144,20 @@ describe('Bouldering physics & Beta solver', () => {
     );
     expect(noFeetDyno.feasible).toBe(false);
 
-    // Superhuman jump directly from start holds to the TOP hold (y=398, >200cm above feet!) must FAIL
-    const superhumanDyno = evaluateMove(
-      init,
-      emptyFreeMap(),
-      'rh',
-      { kind: 'dyno', holdId: 'vd-top', bothHands: true },
-      dynoRoute.holds,
-      standard
-    );
-    expect(superhumanDyno.feasible).toBe(false);
+    // Superhuman jump directly from start holds to the TOP hold or skipping to upper volume must FAIL (even for tall 188cm!)
+    const tall = CLIMBER_PRESETS[2];
+    const tallInit = getInitialAssignment(dynoRoute.holds, tall);
+    for (const skipId of ['vd-vol', 'vd-top']) {
+      const skipTry = evaluateMove(
+        tallInit,
+        emptyFreeMap(),
+        'rh',
+        { kind: 'dyno', holdId: skipId, bothHands: true },
+        dynoRoute.holds,
+        tall
+      );
+      expect(skipTry.feasible, `Tall climber should not dyno straight from start to ${skipId}`).toBe(false);
+    }
 
     // AI Beta solver should solve V4 Dyno Canyon using Dyno!
     const sol = suggestBeta(dynoRoute.holds, standard, 24);

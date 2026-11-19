@@ -62,22 +62,23 @@ export const PRESET_ROUTES: RouteProblem[] = [
     id: 'preset-v4-dyno',
     name: '飞跃峡谷 Dyno',
     grade: 'V4',
-    description: '专为动态飞跃设计：底部大把手双脚深蹲蓄力，用「单手飞跃 (D)」或「双飞 (G)」飞抓中段大把手，切脚摆荡后再上脚直冲完攀点！',
+    description: '专为动态飞跃设计：底部大把手双脚深蹲蓄力，用「双飞 (G)」飞抓中段大把手，切脚摆荡后再踩脚借大造型直冲完攀点！',
     holdColor: '#6B4E9B',
     holds: renumberHolds([
-      makeHold('vd-f1', 124, 52, 'foothold', 'normal', 0, 1.15, '#6B4E9B'),
-      makeHold('vd-f2', 194, 62, 'foothold', 'normal', 0, 1.15, '#6B4E9B'),
-      makeHold('vd-s1', 128, 134, 'jug', 'start', -12, 1.2, '#6B4E9B'),
-      makeHold('vd-s2', 186, 138, 'jug', 'start', 12, 1.2, '#6B4E9B'),
-      // Mid-wall catch jug after a realistic human diagonal Dyno gap!
-      makeHold('vd-catch', 240, 256, 'jug', 'normal', 10, 1.32, '#6B4E9B'),
+      makeHold('vd-f1', 106, 30, 'foothold', 'normal', 0, 1.15, '#6B4E9B'),
+      makeHold('vd-f2', 166, 34, 'foothold', 'normal', 0, 1.15, '#6B4E9B'),
+      makeHold('vd-s1', 110, 142, 'jug', 'start', -10, 1.2, '#6B4E9B'),
+      makeHold('vd-s2', 162, 146, 'jug', 'start', 10, 1.2, '#6B4E9B'),
+      // Mid-wall catch jug above static standing reach — textbook vertical Double Dyno!
+      makeHold('vd-catch', 172, 244, 'jug', 'normal', 6, 1.32, '#6B4E9B'),
       // Recovery footholds below the catch jug after cutting feet
-      makeHold('vd-f3', 214, 152, 'foothold', 'normal', 0, 1.1, '#6B4E9B'),
-      makeHold('vd-f4', 286, 168, 'foothold', 'normal', 0, 1.1, '#6B4E9B'),
-      makeHold('vd-f5', 246, 224, 'foothold', 'normal', 0, 1.05, '#6B4E9B'),
-      makeHold('vd-vol', 184, 304, 'volume', 'normal', -10, 1.05, '#3D434C'),
-      // Final dynamic or static reach to TOP
-      makeHold('vd-top', 214, 398, 'jug', 'top', 0, 1.28, '#6B4E9B'),
+      makeHold('vd-f3', 132, 118, 'foothold', 'normal', 0, 1.1, '#6B4E9B'),
+      makeHold('vd-f4', 226, 148, 'foothold', 'normal', 0, 1.1, '#6B4E9B'),
+      makeHold('vd-f5', 224, 210, 'foothold', 'normal', 0, 1.05, '#6B4E9B'),
+      makeHold('vd-vol', 246, 312, 'volume', 'normal', 10, 1.05, '#3D434C'),
+      makeHold('vd-f6', 174, 272, 'foothold', 'normal', 0, 1.05, '#6B4E9B'),
+      // Final reach to TOP
+      makeHold('vd-top', 208, 400, 'jug', 'top', 0, 1.28, '#6B4E9B'),
     ]),
   },
   {
