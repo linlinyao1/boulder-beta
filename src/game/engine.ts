@@ -733,11 +733,12 @@ export class BoulderEngine {
       const destPt = lerpVec(fromPt, toPt, reachFactor);
 
       const sideSign = isLeft ? -1 : 1;
+      const isSteppingUp = destPt.y > fromPt.y + 8;
       const ctrlPt: Vec2 = {
-        x: (fromPt.x + destPt.x) / 2 + sideSign * (isHand ? 14 : 18),
+        x: (fromPt.x + destPt.x) / 2 + sideSign * (isHand ? 12 : 9),
         y:
           (fromPt.y + destPt.y) / 2 +
-          (a.currentEval?.isDyno ? 22 : isHand ? 10 : 14),
+          (a.currentEval?.isDyno ? 20 : isHand ? 9 : isSteppingUp ? 7 : 3),
       };
 
       const inv = 1 - moveEase;

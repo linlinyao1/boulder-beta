@@ -70,6 +70,7 @@ export interface SolvedPose {
   hips: { lf: Vec2; rf: Vec2 };
   elbows: { lh: Vec2; rh: Vec2 };
   knees: { lf: Vec2; rf: Vec2 };
+  jointDepth: { lh: number; rh: number; lf: number; rf: number }; // 0..1 how much joint bends out of wall (Z foreshortening)
   limbs: Record<LimbId, Vec2>;
   com: Vec2; // Center of Mass
   stretchRatios: Record<LimbId, number>; // distance / maxReach

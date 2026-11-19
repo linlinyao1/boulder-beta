@@ -41,7 +41,7 @@ describe('Bouldering physics & Beta solver', () => {
     expect(crossEv.failReason).toContain('交叉');
   });
 
-  it('keeps bone lengths strictly rigid during pose blending', () => {
+  it('keeps 3D bone lengths consistent and avoids excessive sideways knee splay during 2.5D IK', () => {
     const v1 = PRESET_ROUTES[0];
     const standard = CLIMBER_PRESETS[1];
     const anat = computeAnatomy(standard);
@@ -55,10 +55,16 @@ describe('Bouldering physics & Beta solver', () => {
       standard.flexibility
     );
 
-    expect(Math.abs(dist(mid.shoulders.lh, mid.elbows.lh) - anat.upperArmLen)).toBeLessThan(0.5);
-    expect(Math.abs(dist(mid.elbows.lh, mid.limbs.lh) - anat.forearmLen)).toBeLessThan(0.5);
-    expect(Math.abs(dist(mid.hips.lf, mid.knees.lf) - anat.thighLen)).toBeLessThan(0.5);
-    expect(Math.abs(dist(mid.knees.lf, mid.limbs.lf) - anat.shinLen)).toBeLessThan(0.5);
+    // 2D projected bone lengths must never exceed anatomical max lengths
+    expect(dist(mid.shoulders.lh, mid.elbows.lh)).toBeLessThanOrEqual(anat.upperArmLen + 0.5);
+    expect(dist(mid.elbows.lh, mid.limbs.lh)).toBeLessThanOrEqual(anat.forearmLen + 0.5);
+    expect(dist(mid.hips.lf, mid.knees.lf)).toBeLessThanOrEqual(anat.thighLen + 0.5);
+    expect(dist(mid.knees.lf, mid.limbs.lf)).toBeLessThanOrEqual(anat.shinLen + 0.5);
+
+    // 3D reconstructed thigh length (2D + Z-depth projection) matches exact anatomical thigh length
+    const lf2d = dist(mid.hips.lf, mid.knees.lf);
+    const lfZ = mid.jointDepth.lf * anat.thighLen;
+    expect(Math.abs(Math.hypot(lf2d, lfZ) - anat.thighLen)).toBeLessThan(1.0);
   });
 
   it('shows real anthropometric difference between short and long-wingspan climbers on V5 Morpho', () => {

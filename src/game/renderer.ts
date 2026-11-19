@@ -804,31 +804,53 @@ function drawClimber(
     const hip = side === 'left' ? hipL : hipR;
     const knee = side === 'left' ? knL : knR;
     const foot = side === 'left' ? lf : rf;
+    const depth = side === 'left' ? pose.jointDepth.lf : pose.jointDepth.rf;
     const limbColor = side === 'left' ? LIMB_META.lf.color : LIMB_META.rf.color;
-    drawTaperedLimb(ctx, hip, knee, 5.4 * s, 4.1 * s, isFar ? pantsFar : pantsNear, 'rgba(20,24,28,0.28)');
-    drawTaperedLimb(ctx, knee, foot, 3.9 * s, 2.7 * s, isFar ? calfFar : calfNear, 'rgba(20,24,28,0.28)');
-    drawClimbingShoe(ctx, foot, knee, 5.2 * s, limbColor);
+
+    // 2.5D foreshortening: knee closer to viewer appears slightly fuller & brighter
+    const kneeScale = 1 + depth * 0.22;
+    const thighFill = isFar ? pantsFar : pantsNear;
+    const shinFill = isFar ? calfFar : calfNear;
+    const outline = 'rgba(20,24,28,0.28)';
+
+    // Draw shin behind thigh when knee projects outward toward viewer (realistic depth!)
+    drawTaperedLimb(ctx, knee, foot, 3.8 * s * kneeScale, 2.7 * s, shinFill, outline);
+    drawClimbingShoe(ctx, foot, knee, 5.1 * s, limbColor);
+    drawTaperedLimb(ctx, hip, knee, 5.2 * s, 4.1 * s * kneeScale, thighFill, outline);
+
+    // Subtle knee cap highlight when bent toward camera
+    if (depth > 0.22) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(knee.x, knee.y, 3.4 * s * kneeScale, 0, Math.PI * 2);
+      ctx.fillStyle = isFar ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.12)';
+      ctx.fill();
+      ctx.restore();
+    }
   };
 
   const drawArm = (side: 'left' | 'right', isFar: boolean) => {
     const sh = side === 'left' ? shL : shR;
     const el = side === 'left' ? elL : elR;
     const hand = side === 'left' ? lh : rh;
+    const depth = side === 'left' ? pose.jointDepth.lh : pose.jointDepth.rh;
     const anchored = side === 'left' ? assignment.lh !== null : assignment.rh !== null;
     const limbColor = side === 'left' ? LIMB_META.lh.color : LIMB_META.rh.color;
     const sk = isFar ? skinFar : skinColor;
-    drawTaperedLimb(ctx, sh, el, 4.1 * s, 3.2 * s, sk, skinOutline);
+    const elbowScale = 1 + depth * 0.14;
+
+    drawTaperedLimb(ctx, el, hand, 3.0 * s * elbowScale, 2.2 * s, sk, skinOutline);
+    drawTaperedLimb(ctx, sh, el, 4.0 * s, 3.1 * s * elbowScale, sk, skinOutline);
     // Athletic sleeve cap
     drawTaperedLimb(
       ctx,
       sh,
       { x: lerp(sh.x, el.x, 0.35), y: lerp(sh.y, el.y, 0.35) },
-      4.9 * s,
-      4.1 * s,
+      4.8 * s,
+      4.0 * s,
       isFar ? sleeveFar : sleeveNear,
       'rgba(42, 49, 57, 0.25)'
     );
-    drawTaperedLimb(ctx, el, hand, 3.1 * s, 2.2 * s, sk, skinOutline);
     drawHandMarker(ctx, hand, 4.1 * s, limbColor, anchored);
   };
 

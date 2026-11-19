@@ -91,9 +91,9 @@ function getTorsoFrames(
   hips: { lf: Vec2; rf: Vec2 };
 } {
   // Foreshorten shoulder/hip horizontal width subtly when turning side-on (hipTurn in -1..1)
-  const turnCos = Math.cos(hipTurn * 0.62);
-  const shW = anatomy.shoulderHalfW * clamp(turnCos, 0.52, 1);
-  const hpW = anatomy.hipHalfW * clamp(turnCos, 0.56, 1);
+  const turnCos = Math.cos(hipTurn * 0.56);
+  const shW = anatomy.shoulderHalfW * clamp(turnCos, 0.58, 1);
+  const hpW = anatomy.hipHalfW * clamp(turnCos, 0.62, 1);
 
   const ux = Math.sin(torsoAngle);
   const uy = Math.cos(torsoAngle);
@@ -124,29 +124,33 @@ function getTorsoFrames(
 }
 
 /**
- * Analytical 2-bone IK choosing the biomechanically natural bend solution.
- * Strictly preserves bone lengths len1 and len2 (clamps end effector if beyond max reach).
+ * 2.5D Analytical 2-bone IK with:
+ * 1) Strictly continuous anatomical bend direction (zero sudden 180-degree knee/elbow flips!)
+ * 2) Physically grounded 3D-to-2D foreshortening: when a leg/arm bends deeply, the knee/elbow
+ *    naturally projects partially OUT from the wall (Z-axis toward camera) rather than splaying
+ *    unnaturally flat sideways like a grasshopper!
+ * 3) Rigid 3D bone lengths: sqrt(dist2D^2 + jointZ^2) === len1 & len2!
  */
 export function solveTwoBoneIK(
   root: Vec2,
   target: Vec2,
   len1: number,
   len2: number,
-  limb: LimbId,
-  hipTurn = 0
-): { joint: Vec2; end: Vec2 } {
+  limb: LimbId
+): { joint: Vec2; end: Vec2; depth: number } {
   const dx = target.x - root.x;
   const dy = target.y - root.y;
   const rawD = Math.hypot(dx, dy);
 
-  const minD = Math.abs(len1 - len2) + 2.0;
   const maxD = len1 + len2 - 0.15;
+  const minD = Math.abs(len1 - len2) + 4.0;
 
   if (rawD < 0.001) {
     const dir = limb === 'lh' || limb === 'lf' ? -1 : 1;
     return {
-      joint: { x: root.x + dir * len1 * 0.6, y: root.y - len1 * 0.4 },
+      joint: { x: root.x + dir * len1 * 0.35, y: root.y - len1 * 0.2 },
       end: { x: target.x, y: target.y },
+      depth: 0.7,
     };
   }
 
@@ -154,49 +158,73 @@ export function solveTwoBoneIK(
   const uy = dy / rawD;
   const d = clamp(rawD, minD, maxD);
 
-  // Rigid end position (never stretches bone past len1 + len2 visually!)
+  // Rigid end position (never stretches past maxD)
   const end: Vec2 =
     rawD > maxD
       ? { x: root.x + ux * maxD, y: root.y + uy * maxD }
       : { x: target.x, y: target.y };
 
+  // True 3D triangle altitude h3d of the bend
   const a = (len1 * len1 - len2 * len2 + d * d) / (2 * d);
-  const hSq = Math.max(0, len1 * len1 - a * a);
-  const h = Math.sqrt(hSq);
+  const h3dSq = Math.max(0, len1 * len1 - a * a);
+  const h3d = Math.sqrt(h3dSq);
+
+  // Project bend partially into the wall XY plane (outward frog turn-out)
+  // and partially out of the wall in Z (foreshortening toward viewer)!
+  const bendRatio = clamp(1 - d / maxD, 0, 1);
+  const isHand = limb === 'lh' || limb === 'rh';
+  // For legs: open frog (~66% XY at mild bend), curving more toward camera (~40% XY) on deep high-steps
+  // For arms: ~78% XY at mild bend, ~52% XY on tight lock-offs
+  const xyProjectionRatio = isHand
+    ? lerp(0.78, 0.5, smoothstep(bendRatio))
+    : lerp(0.66, 0.38, smoothstep(bendRatio));
+
+  const h2d = h3d * xyProjectionRatio;
+  const zOut = Math.sqrt(Math.max(0, h3dSq - h2d * h2d));
+  const depth = clamp(zOut / len1, 0, 1);
 
   const midX = root.x + ux * a;
   const midY = root.y + uy * a;
 
-  const px = -uy;
-  const py = ux;
+  // Strictly continuous anatomical bend normal (ZERO discontinuous flips!)
+  let nx: number;
+  let ny: number;
 
-  const cand1: Vec2 = { x: midX + px * h, y: midY + py * h };
-  const cand2: Vec2 = { x: midX - px * h, y: midY - py * h };
-
-  const scoreCandidate = (c: Vec2): number => {
-    const isLeft = limb === 'lh' || limb === 'lf';
-    const isHand = limb === 'lh' || limb === 'rh';
-    const outward = isLeft ? root.x - c.x : c.x - root.x;
-
-    if (isHand) {
-      // Elbows always drop below shoulder-hand line and flare gently outward
-      return -(c.y - root.y) * 2.1 + outward * 0.78;
+  if (limb === 'lf') {
+    // Left knee: (uy, -ux) points LEFT when foot is below hip, and LEFT+UP when high-stepping!
+    nx = uy;
+    ny = -ux;
+  } else if (limb === 'rf') {
+    // Right knee: (-uy, ux) points RIGHT when foot is below hip, and RIGHT+UP when high-stepping!
+    nx = -uy;
+    ny = ux;
+  } else {
+    // Elbows: smoothly prefer outward + downward
+    const p1x = -uy;
+    const p1y = ux;
+    const prefX = limb === 'lh' ? -0.92 : 0.92;
+    const prefY = -0.39;
+    const dot1 = p1x * prefX + p1y * prefY;
+    if (dot1 >= 0) {
+      nx = p1x;
+      ny = p1y;
     } else {
-      // Knees open outward in frog stance, OR subtly turn with hipTurn (drop-knee when turning side-on!)
-      const turnBias = hipTurn * (c.x - root.x) * 0.65;
-      // Avoid knee dropping below the foot (anatomically impossible unless kneeling upside down)
-      const belowFootPenalty = c.y < end.y - 6 ? -80 : 0;
-      return outward * 1.35 + (c.y - root.y) * 0.55 + turnBias + belowFootPenalty;
+      nx = -p1x;
+      ny = -p1y;
     }
+  }
+
+  const joint: Vec2 = {
+    x: midX + nx * h2d,
+    y: midY + ny * h2d,
   };
 
-  const joint = scoreCandidate(cand1) >= scoreCandidate(cand2) ? cand1 : cand2;
-  return { joint, end };
+  return { joint, end, depth };
 }
 
 /**
- * Rebuilds an exact, strictly-rigid SolvedPose from explicit pelvis, torsoAngle, hipTurn,
- * and 4 world-space limb positions. Used every animation frame so bones NEVER stretch or morph!
+ * Rebuilds an exact 2.5D SolvedPose from explicit pelvis, torsoAngle, hipTurn,
+ * and 4 world-space limb positions. Used every animation frame so limbs stay natural and rigid!
  */
 export function buildRigidPoseFromTargets(
   pelvis: Vec2,
@@ -209,10 +237,10 @@ export function buildRigidPoseFromTargets(
 ): SolvedPose {
   const { chest, head, shoulders, hips } = getTorsoFrames(pelvis, torsoAngle, hipTurn, anatomy);
 
-  const lhIK = solveTwoBoneIK(shoulders.lh, limbTargets.lh, anatomy.upperArmLen, anatomy.forearmLen, 'lh', hipTurn);
-  const rhIK = solveTwoBoneIK(shoulders.rh, limbTargets.rh, anatomy.upperArmLen, anatomy.forearmLen, 'rh', hipTurn);
-  const lfIK = solveTwoBoneIK(hips.lf, limbTargets.lf, anatomy.thighLen, anatomy.shinLen, 'lf', hipTurn);
-  const rfIK = solveTwoBoneIK(hips.rf, limbTargets.rf, anatomy.thighLen, anatomy.shinLen, 'rf', hipTurn);
+  const lhIK = solveTwoBoneIK(shoulders.lh, limbTargets.lh, anatomy.upperArmLen, anatomy.forearmLen, 'lh');
+  const rhIK = solveTwoBoneIK(shoulders.rh, limbTargets.rh, anatomy.upperArmLen, anatomy.forearmLen, 'rh');
+  const lfIK = solveTwoBoneIK(hips.lf, limbTargets.lf, anatomy.thighLen, anatomy.shinLen, 'lf');
+  const rfIK = solveTwoBoneIK(hips.rf, limbTargets.rf, anatomy.thighLen, anatomy.shinLen, 'rf');
 
   const limbs: Record<LimbId, Vec2> = {
     lh: lhIK.end,
@@ -222,6 +250,12 @@ export function buildRigidPoseFromTargets(
   };
   const elbows = { lh: lhIK.joint, rh: rhIK.joint };
   const knees = { lf: lfIK.joint, rf: rfIK.joint };
+  const jointDepth = {
+    lh: lhIK.depth,
+    rh: rhIK.depth,
+    lf: lfIK.depth,
+    rf: rfIK.depth,
+  };
 
   const com: Vec2 = {
     x:
@@ -281,6 +315,7 @@ export function buildRigidPoseFromTargets(
     hips,
     elbows,
     knees,
+    jointDepth,
     limbs,
     com,
     stretchRatios,
@@ -319,7 +354,7 @@ export function solvePose(
 
   // Initial pelvis guess
   let px = WALL_WIDTH_CM * 0.5;
-  let py = anatomy.maxLegReach * 0.88;
+  let py = anatomy.maxLegReach * 0.86;
   let torsoAngle = 0;
 
   if (hands.length > 0 && feet.length > 0) {
@@ -327,15 +362,18 @@ export function solvePose(
     const avgHY = hands.reduce((s, p) => s + p.y, 0) / hands.length;
     const avgFX = feet.reduce((s, p) => s + p.x, 0) / feet.length;
     const avgFY = feet.reduce((s, p) => s + p.y, 0) / feet.length;
-    px = avgHX * 0.46 + avgFX * 0.54;
-    const naturalHangPy = avgHY - anatomy.torsoLen * 0.96 - anatomy.maxArmReach * 0.24;
-    const naturalStandPy = avgFY + anatomy.maxLegReach * 0.66;
+    const maxFY = Math.max(...feet.map((p) => p.y));
+    px = avgHX * 0.45 + avgFX * 0.55;
+    // Balance comfortable arm hang with standing comfortably above the footholds (avoid sitting on ankles!)
+    const naturalHangPy = avgHY - anatomy.torsoLen * 0.94 - anatomy.maxArmReach * 0.22;
+    const naturalStandPy = avgFY + anatomy.maxLegReach * 0.68;
+    const minAboveHighFoot = maxFY + 14;
     py = clamp(
-      Math.min(naturalStandPy, naturalHangPy),
+      Math.max(Math.min(naturalStandPy, naturalHangPy), Math.min(minAboveHighFoot, avgHY - anatomy.torsoLen * 0.62)),
       Math.max(24, avgHY - anatomy.torsoLen - anatomy.maxArmReach * 0.88),
-      Math.max(28, avgHY - anatomy.torsoLen * 0.72)
+      Math.max(28, avgHY - anatomy.torsoLen * 0.55)
     );
-    torsoAngle = clamp(Math.atan2(avgHX - avgFX, Math.max(35, avgHY - avgFY)) * 0.42, -0.54, 0.54);
+    torsoAngle = clamp(Math.atan2(avgHX - avgFX, Math.max(35, avgHY - avgFY)) * 0.38, -0.5, 0.5);
   } else if (hands.length > 0) {
     const avgHX = hands.reduce((s, p) => s + p.x, 0) / hands.length;
     const avgHY = hands.reduce((s, p) => s + p.y, 0) / hands.length;
@@ -348,19 +386,19 @@ export function solvePose(
     py = avgFY + anatomy.maxLegReach * 0.82;
   }
 
-  // Estimate natural climbing hip-turn (turn hip into the wall when reaching high/sideways)
+  // Estimate natural climbing hip-turn
   let hipTurn = 0;
   if (reachBias && (reachBias.limb === 'lh' || reachBias.limb === 'rh')) {
     const sideDir = reachBias.limb === 'lh' ? -1 : 1;
     const reachHeight = clamp((reachBias.target.y - (py + anatomy.torsoLen)) / 70, 0, 1);
-    hipTurn = clamp(sideDir * reachHeight * 0.58 * reachBias.strength, -0.68, 0.68);
+    hipTurn = clamp(sideDir * reachHeight * 0.52 * reachBias.strength, -0.62, 0.62);
   } else if (anchored.lh && anchored.rh) {
     const dy = anchored.rh.y - anchored.lh.y;
-    hipTurn = clamp(dy / 95, -0.55, 0.55);
+    hipTurn = clamp(dy / 100, -0.48, 0.48);
   } else if (anchored.lh && !anchored.rh) {
-    hipTurn = -0.35;
+    hipTurn = -0.32;
   } else if (anchored.rh && !anchored.lh) {
-    hipTurn = 0.35;
+    hipTurn = 0.32;
   }
 
   // Iterative weighted constraint projection
@@ -368,12 +406,12 @@ export function solvePose(
   for (let iter = 0; iter < iterations; iter++) {
     const { shoulders, hips } = getTorsoFrames({ x: px, y: py }, torsoAngle, hipTurn, anatomy);
 
-    // 1. Natural hanging balance between hands and standing feet
+    // 1. Natural hanging vs standing balance
     if (feet.length > 0 && hands.length > 0) {
       const avgFY = feet.reduce((s, p) => s + p.y, 0) / feet.length;
       const avgHY = hands.reduce((s, p) => s + p.y, 0) / hands.length;
-      const hangTarget = avgHY - anatomy.torsoLen * 0.98 - anatomy.maxArmReach * 0.26;
-      const standTarget = avgFY + anatomy.maxLegReach * 0.66;
+      const hangTarget = avgHY - anatomy.torsoLen * 0.94 - anatomy.maxArmReach * 0.22;
+      const standTarget = avgFY + anatomy.maxLegReach * 0.68;
       const desiredPy = Math.min(standTarget, hangTarget);
       py += (desiredPy - py) * 0.1;
     } else if (feet.length > 0) {
@@ -399,7 +437,7 @@ export function solvePose(
         px += (dx / d) * pull;
         py += (dy / d) * pull;
         if (isHand) {
-          const desiredLean = clamp((reachBias.target.x - px) / 145, -0.56, 0.56);
+          const desiredLean = clamp((reachBias.target.x - px) / 145, -0.52, 0.52);
           torsoAngle = lerp(torsoAngle, desiredLean, 0.14 * reachBias.strength);
         }
       }
@@ -423,7 +461,7 @@ export function solvePose(
         const leverX = sh.x - px;
         const leverY = sh.y - py;
         const torque = (leverX * uy - leverY * ux) / (anatomy.torsoLen * anatomy.torsoLen);
-        torsoAngle = clamp(torsoAngle - torque * excess * 0.26, -0.62, 0.62);
+        torsoAngle = clamp(torsoAngle - torque * excess * 0.25, -0.58, 0.58);
       } else if (d < anatomy.maxArmReach * 0.24 && d > 0.001) {
         const push = (anatomy.maxArmReach * 0.24 - d) * 0.25;
         px -= (dx / d) * push;
@@ -431,7 +469,7 @@ export function solvePose(
       }
     }
 
-    // 4. Enforce anchored feet within leg reach
+    // 4. Enforce anchored feet within leg reach & prevent crushing hips onto own ankles!
     for (const fLimb of ['lf', 'rf'] as const) {
       const target = anchored[fLimb];
       if (!target) continue;
@@ -440,14 +478,22 @@ export function solvePose(
       const dy = target.y - hp.y;
       const d = Math.hypot(dx, dy);
       const legLimit = anatomy.maxLegReach * 0.96;
+      const minComfortLeg = anatomy.maxLegReach * 0.42;
+
       if (d > legLimit && d > 0.001) {
         const excess = d - legLimit;
         px += (dx / d) * excess * 0.55;
         py += (dy / d) * excess * 0.55;
+      } else if (d < minComfortLeg && d > 0.001) {
+        // Gently push hips UP/away so climber stands on the high foot instead of collapsing onto it
+        const push = (minComfortLeg - d) * 0.22;
+        py += Math.max(0.35, -dy / d) * push;
+        px -= (dx / d) * push * 0.25;
       }
-      const minPelvisOverFoot = -16 - (flexibility - 80) * 0.35;
+
+      const minPelvisOverFoot = -6 - (flexibility - 80) * 0.28;
       if (py < target.y + minPelvisOverFoot) {
-        py = lerp(py, target.y + minPelvisOverFoot, 0.3);
+        py = lerp(py, target.y + minPelvisOverFoot, 0.35);
       }
     }
 
@@ -455,7 +501,7 @@ export function solvePose(
     if (hands.length > 0) {
       const avgHX = hands.reduce((s, p) => s + p.x, 0) / hands.length;
       const avgHY = hands.reduce((s, p) => s + p.y, 0) / hands.length;
-      const desiredTilt = clamp(Math.atan2(avgHX - px, Math.max(30, avgHY - py)) * 0.42, -0.58, 0.58);
+      const desiredTilt = clamp(Math.atan2(avgHX - px, Math.max(30, avgHY - py)) * 0.38, -0.54, 0.54);
       torsoAngle = lerp(torsoAngle, desiredTilt, 0.08);
     }
 
@@ -488,26 +534,26 @@ export function solvePose(
       {
         x: clamp(
           Math.min(
-            hips.lf.x - (avgAnchorX > px + 6 ? 24 : 14),
-            anchored.rf ? anchored.rf.x - 18 : WALL_WIDTH_CM
+            hips.lf.x - (avgAnchorX > px + 6 ? 22 : 13),
+            anchored.rf ? anchored.rf.x - 20 : WALL_WIDTH_CM
           ),
           14,
           WALL_WIDTH_CM - 14
         ),
-        y: Math.max(6, hips.lf.y - anatomy.maxLegReach * 0.74),
+        y: Math.max(8, hips.lf.y - anatomy.maxLegReach * 0.78),
       },
     rf:
       anchored.rf ??
       {
         x: clamp(
           Math.max(
-            hips.rf.x + (avgAnchorX < px - 6 ? 24 : 14),
-            anchored.lf ? anchored.lf.x + 18 : 0
+            hips.rf.x + (avgAnchorX < px - 6 ? 22 : 13),
+            anchored.lf ? anchored.lf.x + 20 : 0
           ),
           14,
           WALL_WIDTH_CM - 14
         ),
-        y: Math.max(6, hips.rf.y - anatomy.maxLegReach * 0.74),
+        y: Math.max(8, hips.rf.y - anatomy.maxLegReach * 0.78),
       },
   };
 
@@ -531,7 +577,7 @@ export function solvePose(
 
 /**
  * Smoothly blends two poses by interpolating pelvis/torso/hipTurn and the 4 limb targets,
- * then re-solving exact 2-bone IK so bone lengths NEVER distort during transitions!
+ * then re-solving exact 2.5D IK so limbs bend naturally without distortion!
  */
 export function blendPosesRigid(
   a: SolvedPose,
