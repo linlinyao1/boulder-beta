@@ -388,8 +388,14 @@ export function suggestBeta(
             if (h.y > maxHandY - 12) return false;
             if (currentHold && h.y < currentHold.y - 25) return false;
             // Avoid both feet crowding the same tiny foothold unless necessary
-            const otherFoot = limb === 'lf' ? node.assignment.rf : node.assignment.lf;
-            if (otherFoot === h.id && HOLD_SPECS[h.type].baseRadiusCm < 12) return false;
+            const otherFootId = limb === 'lf' ? node.assignment.rf : node.assignment.lf;
+            if (otherFootId === h.id && HOLD_SPECS[h.type].baseRadiusCm < 12) return false;
+            // Strictly prevent left foot stepping past right foot (no leg pass-through)
+            const otherFootHold = otherFootId ? holdMap.get(otherFootId) : undefined;
+            if (otherFootHold) {
+              if (limb === 'lf' && h.x > otherFootHold.x + 4) return false;
+              if (limb === 'rf' && h.x < otherFootHold.x - 4) return false;
+            }
           }
           return true;
         });

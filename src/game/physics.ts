@@ -1,6 +1,6 @@
 import { computeAnatomy } from './climber';
 import { getHoldOptimalPullDir, HOLD_SPECS, LIMB_META } from './holds';
-import { clamp, dist, solvePose } from './ik';
+import { clamp, dist, doLegsIntersect, solvePose } from './ik';
 import {
   BetaStep,
   ClimberProfile,
@@ -63,18 +63,27 @@ export function getInitialAssignment(holds: Hold[], profile: ClimberProfile): Li
       return scoreA - scoreB;
     });
 
-  const leftFeet = footCandidates.filter((h) => h.x <= handCenterX + 18);
-  const rightFeet = footCandidates.filter((h) => h.x >= handCenterX - 18);
+  const leftFeet = footCandidates.filter((h) => h.x <= handCenterX + 12);
+  const rightFeet = footCandidates.filter((h) => h.x >= handCenterX - 12);
 
   if (leftFeet.length > 0) assignment.lf = leftFeet[0].id;
   if (rightFeet.length > 0) {
-    const rfChoice = rightFeet.find((h) => h.id !== assignment.lf) ?? rightFeet[0];
-    assignment.rf = rfChoice.id;
+    const lfHold = assignment.lf ? holdMap.get(assignment.lf) : undefined;
+    const validRight = rightFeet.filter((h) => !lfHold || h.x >= lfHold.x - 4);
+    const rfChoice =
+      validRight.find((h) => h.id !== assignment.lf) ?? validRight[0] ?? null;
+    assignment.rf = rfChoice?.id ?? null;
   }
-  // If we still only found one foot and another candidate exists
-  if (!assignment.lf && footCandidates.length > 0) assignment.lf = footCandidates[0].id;
+  if (!assignment.lf && footCandidates.length > 0) {
+    const rfHold = assignment.rf ? holdMap.get(assignment.rf) : undefined;
+    const validLeft = footCandidates.find((h) => !rfHold || h.x <= rfHold.x + 4);
+    assignment.lf = validLeft?.id ?? null;
+  }
   if (!assignment.rf && footCandidates.length > 1) {
-    assignment.rf = footCandidates.find((h) => h.id !== assignment.lf)?.id ?? null;
+    const lfHold = assignment.lf ? holdMap.get(assignment.lf) : undefined;
+    assignment.rf =
+      footCandidates.find((h) => h.id !== assignment.lf && (!lfHold || h.x >= lfHold.x - 4))?.id ??
+      null;
   }
 
   return assignment;
@@ -264,6 +273,98 @@ export function evaluateMove(
     warnings.push(`动态飞跃 (Dyno / 死点出手)，需稳稳接住 #${targetHold.label}`);
   } else if (effectiveReach > 0.92) {
     warnings.push(`${LIMB_META[limb].nameZh}接近极限伸展，体能消耗增大`);
+  }
+
+  // 2.5 Anatomical legality: prevent inhuman leg pass-throughs, bone intersections & tangled crosses
+  const nextLfHold = nextAssignment.lf ? holdMap.get(nextAssignment.lf) : undefined;
+  const nextRfHold = nextAssignment.rf ? holdMap.get(nextAssignment.rf) : undefined;
+  if (nextLfHold && nextRfHold) {
+    if (nextLfHold.x > nextRfHold.x + 6) {
+      return {
+        feasible: false,
+        rating: 'fail',
+        reachRatio: effectiveReach,
+        reachExcessCm,
+        isDyno: false,
+        gripScore: 0,
+        balanceScore: 15,
+        barnDoorRisk: 0.6,
+        directionAlignment: 0.5,
+        staminaCost: 12,
+        failReason: '双脚反向交叉穿越（左脚不可跨到右脚右侧），请先移走对侧脚或做换脚',
+        warnings,
+        resultingPose: nextPose,
+      };
+    }
+    if (doLegsIntersect(nextPose)) {
+      return {
+        feasible: false,
+        rating: 'fail',
+        reachRatio: effectiveReach,
+        reachExcessCm,
+        isDyno: false,
+        gripScore: 0,
+        balanceScore: 15,
+        barnDoorRisk: 0.6,
+        directionAlignment: 0.5,
+        staminaCost: 12,
+        failReason: '双腿骨骼发生交叉碰撞，人体无法完成此脚法',
+        warnings,
+        resultingPose: nextPose,
+      };
+    }
+  }
+
+  // Prevent high single-leg hip twist past opposite side of pelvis
+  if (!isHand) {
+    const crossOffset =
+      limb === 'lf' ? targetHold.x - nextPose.pelvis.x : nextPose.pelvis.x - targetHold.x;
+    const isHighFoot = targetHold.y > nextPose.pelvis.y - 34;
+    if (crossOffset > (isHighFoot ? 20 : 34)) {
+      return {
+        feasible: false,
+        rating: 'fail',
+        reachRatio: effectiveReach,
+        reachExcessCm,
+        isDyno: false,
+        gripScore: 0,
+        balanceScore: 20,
+        barnDoorRisk: 0.55,
+        directionAlignment: 0.4,
+        staminaCost: 12,
+        failReason: `${LIMB_META[limb].nameZh}跨过身体中线过深，髋关节无法扭转到位`,
+        warnings,
+        resultingPose: nextPose,
+      };
+    }
+  }
+
+  // Prevent extreme tangled flat hand-cross (allow clean vertical cross-throughs!)
+  const nextLhHold = nextAssignment.lh ? holdMap.get(nextAssignment.lh) : undefined;
+  const nextRhHold = nextAssignment.rh ? holdMap.get(nextAssignment.rh) : undefined;
+  if (nextLhHold && nextRhHold && nextLhHold.id !== nextRhHold.id) {
+    const handCrossX = nextLhHold.x - nextRhHold.x;
+    const handDiffY = Math.abs(nextLhHold.y - nextRhHold.y);
+    if (handCrossX > 34 || (handCrossX > 18 && handDiffY < 26)) {
+      return {
+        feasible: false,
+        rating: 'fail',
+        reachRatio: effectiveReach,
+        reachExcessCm,
+        isDyno: false,
+        gripScore: 0,
+        balanceScore: 25,
+        barnDoorRisk: 0.5,
+        directionAlignment: 0.4,
+        staminaCost: 14,
+        failReason: '双臂过度交叉缠绕，请调整左右手顺序',
+        warnings,
+        resultingPose: nextPose,
+      };
+    }
+    if (handCrossX > 10) {
+      warnings.push('交叉手动作（Cross），注意转髋贴壁');
+    }
   }
 
   // 3. Hold quality & directional pull alignment

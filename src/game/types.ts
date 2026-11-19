@@ -65,6 +65,7 @@ export interface SolvedPose {
   chest: Vec2;
   head: Vec2;
   torsoAngle: number; // radians, 0 = vertical upright, + = leaning right
+  hipTurn: number; // -1 (left hip into wall) .. 0 (square) .. +1 (right hip into wall)
   shoulders: { lh: Vec2; rh: Vec2 };
   hips: { lf: Vec2; rf: Vec2 };
   elbows: { lh: Vec2; rh: Vec2 };

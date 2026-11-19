@@ -1,6 +1,6 @@
 import { computeAnatomy } from './climber';
 import { getHoldHitRadius, getHoldOptimalPullDir, LIMB_META } from './holds';
-import { clamp, lerp } from './ik';
+import { clamp, lerp, lerpVec } from './ik';
 import { BetaTraceStep } from './physics';
 import {
   BetaStep,
@@ -695,21 +695,33 @@ function drawComPlumbLine(ctx: CanvasRenderingContext2D, tr: WallTransform, pose
   ctx.restore();
 }
 
-function drawLimbSegment(
+function drawTaperedLimb(
   ctx: CanvasRenderingContext2D,
   a: Vec2,
   b: Vec2,
-  thickness: number,
-  color: string
+  rStart: number,
+  rEnd: number,
+  fill: string,
+  outline?: string
 ): void {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 0.5) return;
+  const ang = Math.atan2(dy, dx);
+
   ctx.save();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = thickness;
-  ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.stroke();
+  ctx.arc(a.x, a.y, rStart, ang + Math.PI / 2, ang - Math.PI / 2, false);
+  ctx.arc(b.x, b.y, rEnd, ang - Math.PI / 2, ang + Math.PI / 2, false);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (outline) {
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = 1.1;
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -727,7 +739,7 @@ function drawClimber(
   const s = tr.scale;
 
   // Subtle strain tremor on tough moves / low stamina
-  const jitterAmp = strainLevel > 0.25 ? (strainLevel - 0.25) * 2.2 : 0;
+  const jitterAmp = strainLevel > 0.25 ? (strainLevel - 0.25) * 2.0 : 0;
   const jx = jitterAmp * Math.sin(timeSec * 46);
   const jy = jitterAmp * Math.cos(timeSec * 39);
 
@@ -752,19 +764,19 @@ function drawClimber(
   const lf = pt(pose.limbs.lf, assignment.lf === null);
   const rf = pt(pose.limbs.rf, assignment.rf === null);
 
-  // Wall cast shadow (subtle depth)
+  // Subtle wall cast shadow
   ctx.save();
-  ctx.translate(7, 8);
-  ctx.globalAlpha = 0.16;
+  ctx.translate(6.5, 7.5);
+  ctx.globalAlpha = 0.14;
   const shadowColor = '#1E1A14';
-  drawLimbSegment(ctx, hipL, knL, 9 * s, shadowColor);
-  drawLimbSegment(ctx, knL, lf, 7.5 * s, shadowColor);
-  drawLimbSegment(ctx, hipR, knR, 9 * s, shadowColor);
-  drawLimbSegment(ctx, knR, rf, 7.5 * s, shadowColor);
-  drawLimbSegment(ctx, shL, elL, 7.2 * s, shadowColor);
-  drawLimbSegment(ctx, elL, lh, 6 * s, shadowColor);
-  drawLimbSegment(ctx, shR, elR, 7.2 * s, shadowColor);
-  drawLimbSegment(ctx, elR, rh, 6 * s, shadowColor);
+  drawTaperedLimb(ctx, hipL, knL, 5.2 * s, 4.0 * s, shadowColor);
+  drawTaperedLimb(ctx, knL, lf, 3.8 * s, 2.7 * s, shadowColor);
+  drawTaperedLimb(ctx, hipR, knR, 5.2 * s, 4.0 * s, shadowColor);
+  drawTaperedLimb(ctx, knR, rf, 3.8 * s, 2.7 * s, shadowColor);
+  drawTaperedLimb(ctx, shL, elL, 4.2 * s, 3.2 * s, shadowColor);
+  drawTaperedLimb(ctx, elL, lh, 3.0 * s, 2.3 * s, shadowColor);
+  drawTaperedLimb(ctx, shR, elR, 4.2 * s, 3.2 * s, shadowColor);
+  drawTaperedLimb(ctx, elR, rh, 3.0 * s, 2.3 * s, shadowColor);
   ctx.beginPath();
   ctx.moveTo(shL.x, shL.y);
   ctx.lineTo(shR.x, shR.y);
@@ -778,99 +790,153 @@ function drawClimber(
   ctx.fill();
   ctx.restore();
 
-  // Legs (climbing pants in muted charcoal-olive)
-  const pantsColor = '#3A434D';
-  const pantsLower = '#2D353E';
-  drawLimbSegment(ctx, hipL, knL, 9.2 * s, pantsColor);
-  drawLimbSegment(ctx, knL, lf, 7.4 * s, pantsLower);
-  drawLimbSegment(ctx, hipR, knR, 9.2 * s, pantsColor);
-  drawLimbSegment(ctx, knR, rf, 7.4 * s, pantsLower);
+  const skinColor = '#E7B996';
+  const skinFar = '#D6A480';
+  const skinOutline = 'rgba(42, 34, 28, 0.35)';
+  const pantsNear = '#3B444E';
+  const pantsFar = '#2F3740';
+  const calfNear = '#303841';
+  const calfFar = '#252C34';
+  const sleeveNear = '#EAECE6';
+  const sleeveFar = '#D8DCD4';
 
-  // Climbing shoes
-  drawClimbingShoe(ctx, lf, knL, 5.4 * s, LIMB_META.lf.color);
-  drawClimbingShoe(ctx, rf, knR, 5.4 * s, LIMB_META.rf.color);
+  const drawLeg = (side: 'left' | 'right', isFar: boolean) => {
+    const hip = side === 'left' ? hipL : hipR;
+    const knee = side === 'left' ? knL : knR;
+    const foot = side === 'left' ? lf : rf;
+    const limbColor = side === 'left' ? LIMB_META.lf.color : LIMB_META.rf.color;
+    drawTaperedLimb(ctx, hip, knee, 5.4 * s, 4.1 * s, isFar ? pantsFar : pantsNear, 'rgba(20,24,28,0.28)');
+    drawTaperedLimb(ctx, knee, foot, 3.9 * s, 2.7 * s, isFar ? calfFar : calfNear, 'rgba(20,24,28,0.28)');
+    drawClimbingShoe(ctx, foot, knee, 5.2 * s, limbColor);
+  };
 
-  // Torso (athletic tee)
+  const drawArm = (side: 'left' | 'right', isFar: boolean) => {
+    const sh = side === 'left' ? shL : shR;
+    const el = side === 'left' ? elL : elR;
+    const hand = side === 'left' ? lh : rh;
+    const anchored = side === 'left' ? assignment.lh !== null : assignment.rh !== null;
+    const limbColor = side === 'left' ? LIMB_META.lh.color : LIMB_META.rh.color;
+    const sk = isFar ? skinFar : skinColor;
+    drawTaperedLimb(ctx, sh, el, 4.1 * s, 3.2 * s, sk, skinOutline);
+    // Athletic sleeve cap
+    drawTaperedLimb(
+      ctx,
+      sh,
+      { x: lerp(sh.x, el.x, 0.35), y: lerp(sh.y, el.y, 0.35) },
+      4.9 * s,
+      4.1 * s,
+      isFar ? sleeveFar : sleeveNear,
+      'rgba(42, 49, 57, 0.25)'
+    );
+    drawTaperedLimb(ctx, el, hand, 3.1 * s, 2.2 * s, sk, skinOutline);
+    drawHandMarker(ctx, hand, 4.1 * s, limbColor, anchored);
+  };
+
+  // Depth layering based on hipTurn (far side behind torso, near side in front!)
+  const rightIsNear = pose.hipTurn >= 0;
+
+  // 1. Far leg & far arm behind torso
+  drawLeg(rightIsNear ? 'left' : 'right', true);
+  drawArm(rightIsNear ? 'left' : 'right', true);
+
+  // 2. Near leg
+  drawLeg(rightIsNear ? 'right' : 'left', false);
+
+  // 3. Organic athletic torso with waist taper & hip shorts
   ctx.save();
+  const waistL = lerpVec(shL, hipL, 0.62);
+  const waistR = lerpVec(shR, hipR, 0.62);
+  const waistMid = lerpVec(waistL, waistR, 0.5);
+  const inL = lerpVec(waistL, waistMid, 0.14);
+  const inR = lerpVec(waistR, waistMid, 0.14);
+
+  // Pelvis / climbing pants seat
+  ctx.beginPath();
+  ctx.moveTo(inL.x, inL.y);
+  ctx.lineTo(inR.x, inR.y);
+  ctx.quadraticCurveTo(hipR.x + 2 * s, hipR.y, hipR.x, hipR.y + 3 * s);
+  ctx.lineTo(hipL.x, hipL.y + 3 * s);
+  ctx.quadraticCurveTo(hipL.x - 2 * s, hipL.y, inL.x, inL.y);
+  ctx.closePath();
+  ctx.fillStyle = pantsNear;
+  ctx.fill();
+
+  // Tee shirt with subtle rounded shoulders & 3D turn shading
+  const torsoGrad = ctx.createLinearGradient(shL.x, shL.y, shR.x, shR.y);
+  if (pose.hipTurn >= 0) {
+    torsoGrad.addColorStop(0, '#E1E4DD');
+    torsoGrad.addColorStop(0.55, '#F4F5F0');
+    torsoGrad.addColorStop(1, '#ECEDE7');
+  } else {
+    torsoGrad.addColorStop(0, '#ECEDE7');
+    torsoGrad.addColorStop(0.45, '#F4F5F0');
+    torsoGrad.addColorStop(1, '#E1E4DD');
+  }
+
   ctx.beginPath();
   ctx.moveTo(shL.x, shL.y);
-  ctx.lineTo(shR.x, shR.y);
-  ctx.lineTo(hipR.x, hipR.y);
-  ctx.lineTo(hipL.x, hipL.y);
+  ctx.quadraticCurveTo(chest.x, chest.y - 3.5 * s, shR.x, shR.y);
+  ctx.quadraticCurveTo(inR.x + 1.5 * s, inR.y, hipR.x, hipR.y - 1.5 * s);
+  ctx.quadraticCurveTo(pelvis.x, pelvis.y + 1.5 * s, hipL.x, hipL.y - 1.5 * s);
+  ctx.quadraticCurveTo(inL.x - 1.5 * s, inL.y, shL.x, shL.y);
   ctx.closePath();
-  ctx.fillStyle = '#F2F3EE';
+  ctx.fillStyle = torsoGrad;
   ctx.fill();
   ctx.strokeStyle = '#2A3139';
-  ctx.lineWidth = Math.max(1.4, 1.8 * s);
+  ctx.lineWidth = Math.max(1.2, 1.5 * s);
   ctx.lineJoin = 'round';
   ctx.stroke();
 
-  // Subtle vest/back stripe
+  // Subtle spine seam shifted with hipTurn
+  const spineShift = -pose.hipTurn * 4.5 * s;
   ctx.beginPath();
-  ctx.moveTo(lerp(shL.x, shR.x, 0.5), lerp(shL.y, shR.y, 0.5));
-  ctx.lineTo(pelvis.x, pelvis.y);
+  ctx.moveTo(chest.x + spineShift, chest.y);
+  ctx.lineTo(pelvis.x + spineShift, pelvis.y);
   ctx.strokeStyle = 'rgba(42, 49, 57, 0.14)';
-  ctx.lineWidth = Math.max(1.2, 2 * s);
+  ctx.lineWidth = Math.max(1.1, 1.6 * s);
   ctx.stroke();
 
-  // Chalk bag clipped to lower back
+  // Chalk bag clipped to lower back (shifts smoothly with hipTurn!)
+  const bagX = pelvis.x + spineShift;
+  const bagY = pelvis.y - 1.5 * s;
   ctx.beginPath();
-  ctx.roundRect(pelvis.x - 5.5 * s, pelvis.y - 3 * s, 11 * s, 11 * s, 3 * s);
+  ctx.roundRect(bagX - 5.2 * s, bagY - 2.2 * s, 10.4 * s, 10.2 * s, 3 * s);
   ctx.fillStyle = '#D95D39';
   ctx.fill();
   ctx.strokeStyle = '#1E232A';
   ctx.lineWidth = 1.1;
   ctx.stroke();
-  // White chalk rim
   ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(pelvis.x - 4.2 * s, pelvis.y - 2.6 * s, 8.4 * s, 2.2 * s);
+  ctx.fillRect(bagX - 3.8 * s, bagY - 1.8 * s, 7.6 * s, 2.0 * s);
   ctx.restore();
 
-  // Arms (skin tone + tee sleeves)
-  const skinColor = '#E7B996';
-  const sleeveColor = '#E6E8E2';
-  drawLimbSegment(ctx, shL, elL, 7.2 * s, skinColor);
-  drawLimbSegment(ctx, shL, { x: lerp(shL.x, elL.x, 0.36), y: lerp(shL.y, elL.y, 0.36) }, 8.6 * s, sleeveColor);
-  drawLimbSegment(ctx, elL, lh, 5.8 * s, skinColor);
+  // 4. Neck & head
+  drawTaperedLimb(ctx, chest, lerpVec(chest, head, 0.56), 3.0 * s, 2.5 * s, skinColor);
 
-  drawLimbSegment(ctx, shR, elR, 7.2 * s, skinColor);
-  drawLimbSegment(ctx, shR, { x: lerp(shR.x, elR.x, 0.36), y: lerp(shR.y, elR.y, 0.36) }, 8.6 * s, sleeveColor);
-  drawLimbSegment(ctx, elR, rh, 5.8 * s, skinColor);
-
-  // Chalked hands with subtle limb color ring
-  drawHandMarker(ctx, lh, 4.4 * s, LIMB_META.lh.color, assignment.lh !== null);
-  drawHandMarker(ctx, rh, 4.4 * s, LIMB_META.rh.color, assignment.rh !== null);
-
-  // Head (looking subtly toward next target or upward)
   const headR = anatomy.headRadius * s;
   ctx.save();
   ctx.beginPath();
   ctx.arc(head.x, head.y, headR, 0, Math.PI * 2);
-  ctx.fillStyle = '#E7B996';
+  ctx.fillStyle = skinColor;
   ctx.fill();
   ctx.strokeStyle = '#252B33';
-  ctx.lineWidth = 1.4;
+  ctx.lineWidth = 1.3;
   ctx.stroke();
 
-  // Hair cap / beanie
-  ctx.beginPath();
-  ctx.arc(head.x, head.y, headR * 1.02, Math.PI * 0.95, Math.PI * 2.05);
-  ctx.fillStyle = '#252B33';
-  ctx.fill();
-
-  // Tiny directional gaze dot/visor cue
+  // Hair silhouette shifted slightly by look direction
+  let gazeBiasX = pose.hipTurn * 2.2;
   if (lookTarget) {
     const lt = worldToScreen(lookTarget, tr);
-    const ang = Math.atan2(lt.y - head.y, lt.x - head.x);
-    ctx.beginPath();
-    ctx.arc(head.x + Math.cos(ang) * headR * 0.45, head.y + Math.sin(ang) * headR * 0.45, 1.5, 0, Math.PI * 2);
-    ctx.fillStyle = '#252B33';
-    ctx.fill();
+    gazeBiasX = clamp((lt.x - head.x) / 60, -1, 1) * 2.5;
   }
+  ctx.beginPath();
+  ctx.arc(head.x - gazeBiasX * 0.35, head.y - 0.5 * s, headR * 1.03, Math.PI * 0.92, Math.PI * 2.08);
+  ctx.fillStyle = '#252B33';
+  ctx.fill();
   ctx.restore();
 
-  // Neck subtle bridge
-  drawLimbSegment(ctx, chest, { x: lerp(chest.x, head.x, 0.48), y: lerp(chest.y, head.y, 0.48) }, 5 * s, skinColor);
+  // 5. Near arm in front
+  drawArm(rightIsNear ? 'right' : 'left', false);
 }
 
 function drawHandMarker(ctx: CanvasRenderingContext2D, p: Vec2, r: number, color: string, anchored: boolean): void {
