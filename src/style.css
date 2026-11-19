@@ -986,15 +986,20 @@ input[type='range'] {
 }
 
 @media (max-width: 960px) {
+  .app-shell {
+    height: 100dvh;
+  }
   .workspace {
     grid-template-columns: 1fr;
-    grid-template-rows: 56vh 1fr;
+    grid-template-rows: 54dvh 1fr;
     max-width: 100vw;
   }
   .sidebar {
     border-left: none;
     border-top: 1px solid var(--border);
     max-width: 100vw;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: env(safe-area-inset-bottom, 16px);
   }
   .route-meta {
     display: none;
@@ -1003,8 +1008,12 @@ input[type='range'] {
     overflow-x: auto;
     justify-content: flex-start;
     scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
   }
   .stage-top-dock::-webkit-scrollbar {
     display: none;
+  }
+  .limb-btn {
+    padding: 6px 10px;
   }
 }
