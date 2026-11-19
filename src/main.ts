@@ -1,9 +1,10 @@
 import './style.css';
 import { CLIMBER_PRESETS, computeAnatomy } from './game/climber';
+import { targetLabel } from './game/contact';
 import { BoulderEngine, EngineSnapshot } from './game/engine';
 import { ALL_LIMBS, HOLD_COLORS, HOLD_SPECS, LIMB_META } from './game/holds';
 import { PRESET_ROUTES } from './game/presets';
-import { HoldRole, HoldType } from './game/types';
+import { HoldRole, HoldType, PlanContactMode } from './game/types';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 
@@ -229,6 +230,9 @@ window.addEventListener('keydown', (e) => {
     else if (e.key === '2') engine.setActiveLimb('rh');
     else if (e.key === '3') engine.setActiveLimb('lf');
     else if (e.key === '4') engine.setActiveLimb('rf');
+    else if (e.key.toLowerCase() === 'h') engine.setPlanContactMode('hold');
+    else if (e.key.toLowerCase() === 's') engine.setPlanContactMode('smear');
+    else if (e.key.toLowerCase() === 'f') engine.setPlanContactMode('flag');
     else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       engine.undoBetaStep();
@@ -325,6 +329,26 @@ function renderStageTopDock(snap: EngineSnapshot): void {
         }).join('')}
       </div>
       <div class="dock-divider"></div>
+      <div class="limb-dock" title="接触方式：抓点 / 踩墙 / 悬空">
+        ${(
+          [
+            ['hold', '抓点', 'H'],
+            ['smear', '踩墙', 'S'],
+            ['flag', '悬空', 'F'],
+          ] as [PlanContactMode, string, string][]
+        )
+          .map(
+            ([mode, label, key]) => `
+          <button class="limb-btn ${snap.planContactMode === mode ? 'active' : ''}" data-cmode="${mode}" style="${
+              snap.planContactMode === mode ? 'border-color:#181d22;' : ''
+            }">
+            <span>${label}</span>
+            <span class="kbd-hint">${key}</span>
+          </button>`
+          )
+          .join('')}
+      </div>
+      <div class="dock-divider"></div>
       <label class="toggle-chip">
         <input type="checkbox" id="tg-reach" ${snap.showReachArc ? 'checked' : ''}/> 可达圈
       </label>
@@ -337,7 +361,14 @@ function renderStageTopDock(snap: EngineSnapshot): void {
     `;
 
     stageTopDock.querySelectorAll<HTMLButtonElement>('.limb-btn').forEach((btn) => {
-      btn.addEventListener('click', () => engine.setActiveLimb(btn.dataset.limb as EngineSnapshot['activeLimb']));
+      if (btn.dataset.limb) {
+        btn.addEventListener('click', () => engine.setActiveLimb(btn.dataset.limb as EngineSnapshot['activeLimb']));
+      }
+      if (btn.dataset.cmode) {
+        btn.addEventListener('click', () =>
+          engine.setPlanContactMode(btn.dataset.cmode as PlanContactMode)
+        );
+      }
     });
     stageTopDock.querySelector<HTMLInputElement>('#tg-reach')?.addEventListener('change', (e) => {
       engine.setDisplayToggle('showReachArc', (e.target as HTMLInputElement).checked);
@@ -396,6 +427,13 @@ function renderStageTopDock(snap: EngineSnapshot): void {
 }
 
 function renderStageBottomPill(snap: EngineSnapshot): void {
+  const tagMap: Record<'solid' | 'hard' | 'dyno' | 'fail', string> = {
+    solid: '稳妥可达',
+    hard: '吃力伸展',
+    dyno: '动态飞跃',
+    fail: '无法完成',
+  };
+
   if (snap.mode === 'plan' && snap.hoveredHoldId && snap.hoveredEval) {
     const hold = snap.holds.find((h) => h.id === snap.hoveredHoldId);
     const ev = snap.hoveredEval;
@@ -404,12 +442,6 @@ function renderStageBottomPill(snap: EngineSnapshot): void {
       return;
     }
     const limbName = LIMB_META[snap.activeLimb].nameZh;
-    const tagMap: Record<typeof ev.rating, string> = {
-      solid: '稳妥可达',
-      hard: '吃力伸展',
-      dyno: '动态飞跃',
-      fail: '无法完成',
-    };
     const detail = ev.feasible
       ? `体能 -${ev.staminaCost}% · 抓握 ${ev.gripScore} · 稳定 ${ev.balanceScore}${
           ev.warnings[0] ? ` · ${ev.warnings[0]}` : ''
@@ -420,6 +452,20 @@ function renderStageBottomPill(snap: EngineSnapshot): void {
     stageBottomPill.innerHTML = `
       <span class="eval-tag ${ev.rating}">${tagMap[ev.rating]}</span>
       <span>${limbName} → #${hold.label} ${HOLD_SPECS[hold.type].shortZh}：${detail}</span>
+    `;
+  } else if (snap.mode === 'plan' && snap.wallHoverEval && snap.planContactMode !== 'hold') {
+    const ev = snap.wallHoverEval;
+    const limbName = LIMB_META[snap.activeLimb].nameZh;
+    const modeLabel = snap.planContactMode === 'smear' ? '踩墙/蹭墙' : '悬空配重';
+    const detail = ev.feasible
+      ? `体能 -${ev.staminaCost}% · 摩擦/配重 ${ev.gripScore} · 稳定 ${ev.balanceScore}${
+          ev.warnings[0] ? ` · ${ev.warnings[0]}` : ''
+        }`
+      : ev.failReason ?? '动作不可行';
+    stageBottomPill.classList.remove('hidden');
+    stageBottomPill.innerHTML = `
+      <span class="eval-tag ${ev.rating}">${tagMap[ev.rating]}</span>
+      <span>${limbName} → ${modeLabel}：${detail}</span>
     `;
   } else if (snap.mode === 'climb' && snap.climbStatus !== 'success' && snap.climbStatus !== 'failed') {
     stageBottomPill.classList.remove('hidden');
@@ -663,7 +709,12 @@ function renderPlanPanel(snap: EngineSnapshot): void {
       <div class="section-sub mono">${snap.betaSteps.length} 步</div>
     </div>
 
-    <div class="route-desc-box">${snap.routeDescription}</div>
+    <div class="route-desc-box">
+      ${snap.routeDescription}
+      <div style="margin-top:6px;color:var(--ink-muted);">
+        接触方式：选「抓点」点岩点；选「踩墙」点空墙摩擦顶墙；选「悬空」点空墙做配重摆腿/摆手（快捷键 H / S / F）。
+      </div>
+    </div>
 
     <div class="beta-summary-bar ${summaryClass}">${summaryText}</div>
 
@@ -687,16 +738,21 @@ function renderPlanPanel(snap: EngineSnapshot): void {
 
       ${snap.betaTraces
         .map((tr, i) => {
-          const h = holdMap.get(tr.step.targetHoldId);
+          const t = tr.step.target;
+          const h = t.kind === 'hold' ? holdMap.get(t.holdId) : undefined;
           const m = LIMB_META[tr.step.limb];
           const ev = tr.evaluation;
           const isFail = !ev.feasible || tr.pumpedOut;
           const isActive = snap.inspectedStepIndex === i;
+          const dest =
+            t.kind === 'hold'
+              ? `#${h?.label ?? '?'} ${h ? HOLD_SPECS[h.type].shortZh : ''}`
+              : targetLabel(t);
           const subText = isFail
             ? tr.pumpedOut && ev.feasible
               ? '体能耗尽 (0%)'
               : ev.failReason ?? '动作失败'
-            : `${ev.isDyno ? '动态飞跃 · ' : ev.rating === 'hard' ? '吃力 · ' : '稳妥 · '}体能剩 ${Math.round(
+            : `${ev.isDyno ? '动态飞跃 · ' : t.kind === 'smear' ? '踩墙 · ' : t.kind === 'flag' ? '悬空 · ' : ev.rating === 'hard' ? '吃力 · ' : '稳妥 · '}体能剩 ${Math.round(
                 tr.staminaAfter
               )}%`;
 
@@ -705,8 +761,10 @@ function renderPlanPanel(snap: EngineSnapshot): void {
               <span class="beta-step-num" style="background:${isFail ? '#DC2626' : m.color};">${i + 1}</span>
               <div class="beta-item-main">
                 <div class="beta-item-title">
-                  <span>${m.nameZh} → #${h?.label ?? '?'} ${h ? HOLD_SPECS[h.type].shortZh : ''}</span>
+                  <span>${m.nameZh} → ${dest}</span>
                   ${h?.role === 'top' ? '<span class="grade-pill" style="font-size:9px;padding:1px 4px;">TOP</span>' : ''}
+                  ${t.kind === 'smear' ? '<span class="grade-pill" style="font-size:9px;padding:1px 4px;background:#0d9488;">踩墙</span>' : ''}
+                  ${t.kind === 'flag' ? '<span class="grade-pill" style="font-size:9px;padding:1px 4px;background:#6b7280;">悬空</span>' : ''}
                 </div>
                 <div class="beta-item-sub">${subText}</div>
               </div>
@@ -766,7 +824,12 @@ function renderClimbPanel(snap: EngineSnapshot): void {
     <div class="beta-list">
       ${snap.betaTraces
         .map((tr, i) => {
-          const h = holdMap.get(tr.step.targetHoldId);
+          const t = tr.step.target;
+          const h = t.kind === 'hold' ? holdMap.get(t.holdId) : undefined;
+          const dest =
+            t.kind === 'hold'
+              ? `#${h?.label ?? '?'} ${h ? HOLD_SPECS[h.type].shortZh : ''}`
+              : targetLabel(t);
           const m = LIMB_META[tr.step.limb];
           const isCurrent = snap.climbStepIndex === i && snap.climbStatus === 'running';
           const isDone =
@@ -784,9 +847,7 @@ function renderClimbPanel(snap: EngineSnapshot): void {
                 isFailedStep ? '#DC2626' : isDone ? '#15803D' : m.color
               };">${isDone && !isFailedStep ? '✓' : i + 1}</span>
               <div class="beta-item-main">
-                <div class="beta-item-title">${m.nameZh} → #${h?.label ?? '?'} ${
-            h ? HOLD_SPECS[h.type].shortZh : ''
-          }</div>
+                <div class="beta-item-title">${m.nameZh} → ${dest}</div>
                 <div class="beta-item-sub">
                   抓握 ${tr.evaluation.gripScore} · 稳定 ${tr.evaluation.balanceScore} · 消耗 ${
             tr.evaluation.staminaCost

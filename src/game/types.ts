@@ -51,7 +51,7 @@ export interface ClimberAnatomy {
 }
 
 /**
- * Which hold each limb currently occupies (null = free / smearing / dangling)
+ * Which hold each limb currently occupies (null = free / smear / flag / dangling)
  */
 export interface LimbAssignment {
   lh: string | null;
@@ -59,6 +59,30 @@ export interface LimbAssignment {
   lf: string | null;
   rf: string | null;
 }
+
+/** Wall smear (friction push) or dangling counterbalance flag when not on a hold */
+export type FreeContactMode = 'smear' | 'flag';
+
+export interface FreeContact {
+  mode: FreeContactMode;
+  x: number;
+  y: number;
+}
+
+export interface FreeLimbMap {
+  lh: FreeContact | null;
+  rh: FreeContact | null;
+  lf: FreeContact | null;
+  rf: FreeContact | null;
+}
+
+export type LimbTarget =
+  | { kind: 'hold'; holdId: string }
+  | { kind: 'smear'; x: number; y: number }
+  | { kind: 'flag'; x: number; y: number };
+
+/** Planner placement mode for the active limb */
+export type PlanContactMode = 'hold' | 'smear' | 'flag';
 
 export interface SolvedPose {
   pelvis: Vec2;
@@ -80,7 +104,7 @@ export interface SolvedPose {
 export interface BetaStep {
   id: string;
   limb: LimbId;
-  targetHoldId: string;
+  target: LimbTarget;
 }
 
 export type MoveRating = 'solid' | 'hard' | 'dyno' | 'fail';

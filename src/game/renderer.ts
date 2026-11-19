@@ -5,16 +5,19 @@ import { BetaTraceStep } from './physics';
 import {
   BetaStep,
   ClimberProfile,
+  FreeLimbMap,
   GameMode,
   Hold,
   LimbAssignment,
   LimbId,
   MoveEvaluation,
+  PlanContactMode,
   SolvedPose,
   Vec2,
   WALL_HEIGHT_CM,
   WALL_WIDTH_CM,
 } from './types';
+import { emptyFreeMap } from './contact';
 
 export interface Particle {
   x: number;
@@ -44,11 +47,14 @@ export interface RenderContextState {
   profile: ClimberProfile;
   pose: SolvedPose;
   assignment: LimbAssignment;
+  freeLimbs?: FreeLimbMap;
   // Setter mode
   selectedHoldId: string | null;
   hoveredHoldId: string | null;
   // Plan mode
   activeLimb: LimbId;
+  planContactMode?: PlanContactMode;
+  wallHoverPos?: Vec2 | null;
   betaSteps: BetaStep[];
   betaTraces: BetaTraceStep[];
   inspectedStepIndex: number; // -1 = start stance, 0..N-1 = after step i
@@ -218,6 +224,9 @@ export function renderScene(
   if ((state.mode === 'plan' || state.mode === 'climb') && state.showBetaArrows && state.betaSteps.length > 0) {
     drawBetaArrows(ctx, tr, state);
   }
+
+  // 5b. Free contacts (smear / flag) markers
+  drawFreeContacts(ctx, tr, state);
 
   // 6. Holds
   for (const hold of state.holds) {
@@ -581,18 +590,103 @@ function drawGymTape(ctx: CanvasRenderingContext2D, pos: Vec2, r: number, role: 
   ctx.restore();
 }
 
+function resolveTraceTarget(trace: BetaTraceStep, holdMap: Map<string, Hold>): Vec2 | null {
+  const t = trace.step.target;
+  if (t.kind === 'hold') {
+    const h = holdMap.get(t.holdId);
+    return h ? { x: h.x, y: h.y } : null;
+  }
+  return { x: t.x, y: t.y };
+}
+
+function resolveTracePrev(
+  trace: BetaTraceStep,
+  holdMap: Map<string, Hold>
+): Vec2 | null {
+  const limb = trace.step.limb;
+  const prevId = trace.assignmentBefore[limb];
+  if (prevId) {
+    const h = holdMap.get(prevId);
+    return h ? { x: h.x, y: h.y } : null;
+  }
+  const free = trace.freeBefore?.[limb];
+  if (free) return { x: free.x, y: free.y };
+  return null;
+}
+
+function drawFreeContacts(
+  ctx: CanvasRenderingContext2D,
+  tr: WallTransform,
+  state: RenderContextState
+): void {
+  const free = state.freeLimbs ?? emptyFreeMap();
+  for (const limb of ['lh', 'rh', 'lf', 'rf'] as LimbId[]) {
+    const c = free[limb];
+    if (!c) continue;
+    const p = worldToScreen({ x: c.x, y: c.y }, tr);
+    const meta = LIMB_META[limb];
+    ctx.save();
+    if (c.mode === 'smear') {
+      // Foot/hand smear footprint
+      ctx.strokeStyle = meta.color;
+      ctx.fillStyle = `${meta.color}33`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, 14, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.font = '700 9px "JetBrains Mono", monospace';
+      ctx.fillStyle = meta.color;
+      ctx.textAlign = 'center';
+      ctx.fillText('踩墙', p.x, p.y - 14);
+    } else {
+      // Flag dangling marker
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = meta.color;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 11, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = '700 9px "JetBrains Mono", monospace';
+      ctx.fillStyle = meta.color;
+      ctx.textAlign = 'center';
+      ctx.fillText('悬空', p.x, p.y - 14);
+    }
+    ctx.restore();
+  }
+
+  // Wall hover ghost for smear/flag placement
+  if (state.mode === 'plan' && state.wallHoverPos && state.planContactMode !== 'hold') {
+    const p = worldToScreen(state.wallHoverPos, tr);
+    const meta = LIMB_META[state.activeLimb];
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    ctx.strokeStyle = meta.color;
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    if (state.planContactMode === 'smear') {
+      ctx.ellipse(p.x, p.y, 15, 10, 0, 0, Math.PI * 2);
+    } else {
+      ctx.arc(p.x, p.y, 12, 0, Math.PI * 2);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 function drawBetaArrows(ctx: CanvasRenderingContext2D, tr: WallTransform, state: RenderContextState): void {
   const holdMap = new Map(state.holds.map((h) => [h.id, h]));
 
   state.betaTraces.forEach((trace, idx) => {
-    const prevId = trace.assignmentBefore[trace.step.limb];
-    const nextHold = holdMap.get(trace.step.targetHoldId);
-    if (!nextHold) return;
+    const nextPos = resolveTraceTarget(trace, holdMap);
+    if (!nextPos) return;
 
-    const prevHold = prevId ? holdMap.get(prevId) : null;
-    const p2 = worldToScreen(nextHold, tr);
-    const p1 = prevHold
-      ? worldToScreen(prevHold, tr)
+    const prevPos = resolveTracePrev(trace, holdMap);
+    const p2 = worldToScreen(nextPos, tr);
+    const p1 = prevPos
+      ? worldToScreen(prevPos, tr)
       : { x: p2.x, y: p2.y + 34 };
 
     const meta = LIMB_META[trace.step.limb];

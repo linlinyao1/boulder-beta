@@ -1,7 +1,8 @@
 import { CLIMBER_PRESETS, computeAnatomy } from './climber';
 import { ALL_LIMBS, HOLD_COLORS, HOLD_SPECS, LIMB_META, renumberHolds } from './holds';
 import { clamp, dist } from './ik';
-import { buildHoldMap, evaluateMove, getInitialAssignment, isTopReached } from './physics';
+import { emptyFreeMap } from './contact';
+import { buildHoldMap, evaluateHoldMove, getInitialAssignment, isTopReached } from './physics';
 import {
   BetaStep,
   ClimberProfile,
@@ -401,7 +402,7 @@ export function suggestBeta(
         });
 
         for (const target of candidates) {
-          const ev = evaluateMove(node.assignment, limb, target.id, holds, profile);
+          const ev = evaluateHoldMove(node.assignment, limb, target.id, holds, profile, emptyFreeMap());
           if (!ev.feasible) continue;
 
           const newStamina = node.stamina - ev.staminaCost;
@@ -416,7 +417,7 @@ export function suggestBeta(
           const step: BetaStep = {
             id: nextUid('step'),
             limb,
-            targetHoldId: target.id,
+            target: { kind: 'hold', holdId: target.id },
           };
           const steps = [...node.steps, step];
 

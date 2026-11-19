@@ -1,4 +1,14 @@
 import { CLIMBER_PRESETS, computeAnatomy } from './climber';
+import {
+  applyLimbTarget,
+  detachLimb,
+  emptyFreeMap,
+  freeOverrides,
+  holdTarget,
+  smearTarget,
+  flagTarget,
+  targetLabel,
+} from './contact';
 import { generateRoute, nextUid, suggestBeta } from './generator';
 import { getHoldHitRadius, HOLD_COLORS, HOLD_SPECS, LIMB_META, renumberHolds } from './holds';
 import {
@@ -32,13 +42,16 @@ import {
   BetaStep,
   ClimberProfile,
   ClimbResult,
+  FreeLimbMap,
   GameMode,
   Hold,
   HoldRole,
   HoldType,
   LimbAssignment,
   LimbId,
+  LimbTarget,
   MoveEvaluation,
+  PlanContactMode,
   RouteProblem,
   SolvedPose,
   Vec2,
@@ -65,6 +78,7 @@ export interface EngineSnapshot {
   brush: SetterBrush;
   profile: ClimberProfile;
   activeLimb: LimbId;
+  planContactMode: PlanContactMode;
   betaSteps: BetaStep[];
   betaTraces: BetaTraceStep[];
   inspectedStepIndex: number;
@@ -72,6 +86,8 @@ export interface EngineSnapshot {
   betaFirstFailure: number | null;
   betaFinalStamina: number;
   hoveredEval: MoveEvaluation | null;
+  wallHoverEval: MoveEvaluation | null;
+  inspectedFree: FreeLimbMap;
   showReachArc: boolean;
   showComLine: boolean;
   showBetaArrows: boolean;
@@ -94,6 +110,7 @@ interface ClimbAnimState {
   supportPose: SolvedPose;
   targetPose: SolvedPose;
   currentAssignment: LimbAssignment;
+  currentFree: FreeLimbMap;
   currentEval: MoveEvaluation | null;
   willFail: boolean;
   failReason: string;
@@ -148,6 +165,7 @@ export class BoulderEngine {
 
   // Plan state
   private activeLimb: LimbId = 'rh';
+  private planContactMode: PlanContactMode = 'hold';
   private betaSteps: BetaStep[] = [];
   private betaTraces: BetaTraceStep[] = [];
   private betaReachesTop = false;
@@ -155,6 +173,8 @@ export class BoulderEngine {
   private betaFinalStamina = 100;
   private inspectedStepIndex = -1; // -1 = start stance
   private previewEvaluations = new Map<string, MoveEvaluation>();
+  private wallHoverEval: MoveEvaluation | null = null;
+  private wallHoverPos: Vec2 | null = null;
   private showReachArc = true;
   private showComLine = true;
   private showBetaArrows = true;
@@ -309,7 +329,9 @@ export class BoulderEngine {
     if (!this.selectedHoldId) return;
     const targetId = this.selectedHoldId;
     this.holds = renumberHolds(this.holds.filter((h) => h.id !== targetId));
-    this.betaSteps = this.betaSteps.filter((s) => s.targetHoldId !== targetId);
+    this.betaSteps = this.betaSteps.filter(
+      (s) => !(s.target.kind === 'hold' && s.target.holdId === targetId)
+    );
     this.selectedHoldId = null;
     this.inspectedStepIndex = Math.min(this.inspectedStepIndex, this.betaSteps.length - 1);
     this.recomputeBeta();
@@ -342,6 +364,42 @@ export class BoulderEngine {
   public setActiveLimb(limb: LimbId): void {
     this.activeLimb = limb;
     this.recomputePreviewEvaluations();
+    this.emit();
+  }
+
+  public setPlanContactMode(mode: PlanContactMode): void {
+    this.planContactMode = mode;
+    this.wallHoverEval = null;
+    this.wallHoverPos = null;
+    this.emit();
+  }
+
+  public addBetaTarget(target: LimbTarget): void {
+    const contacts = this.getInspectedContacts();
+    if (target.kind === 'hold' && contacts.assignment[this.activeLimb] === target.holdId) {
+      return;
+    }
+
+    const prefix =
+      this.inspectedStepIndex < this.betaSteps.length - 1
+        ? this.betaSteps.slice(0, this.inspectedStepIndex + 1)
+        : this.betaSteps;
+
+    const newStep: BetaStep = {
+      id: nextUid('step'),
+      limb: this.activeLimb,
+      target,
+    };
+    this.betaSteps = [...prefix, newStep];
+    this.inspectedStepIndex = this.betaSteps.length - 1;
+    this.recomputeBeta();
+    this.syncPlanPose(false);
+
+    const puff =
+      target.kind === 'hold'
+        ? this.holds.find((h) => h.id === target.holdId)
+        : { x: target.x, y: target.y };
+    if (puff) this.spawnChalkPuff({ x: puff.x, y: puff.y }, 7);
     this.emit();
   }
 
@@ -414,7 +472,15 @@ export class BoulderEngine {
     const holdMap = buildHoldMap(this.holds);
     const anatomy = computeAnatomy(this.profile);
     const initAssign = getInitialAssignment(this.holds, this.profile);
-    const startPose = solvePose(initAssign, holdMap, anatomy, this.profile.flexibility);
+    const initFree = emptyFreeMap();
+    const startPose = solvePose(
+      initAssign,
+      holdMap,
+      anatomy,
+      this.profile.flexibility,
+      undefined,
+      freeOverrides(initFree)
+    );
 
     this.displayPose = startPose;
     this.climbStamina = 100;
@@ -423,7 +489,7 @@ export class BoulderEngine {
     this.climbStatus = 'running';
     this.particles = [];
 
-    this.beginClimbStep(0, initAssign, startPose, 100, 0, null, 0);
+    this.beginClimbStep(0, initAssign, initFree, startPose, 100, 0, null, 0);
     this.emit();
   }
 
@@ -449,7 +515,14 @@ export class BoulderEngine {
     this.climbResult = null;
     const holdMap = buildHoldMap(this.holds);
     const initAssign = getInitialAssignment(this.holds, this.profile);
-    this.displayPose = solvePose(initAssign, holdMap, computeAnatomy(this.profile), this.profile.flexibility);
+    this.displayPose = solvePose(
+      initAssign,
+      holdMap,
+      computeAnatomy(this.profile),
+      this.profile.flexibility,
+      undefined,
+      freeOverrides(emptyFreeMap())
+    );
     this.targetDisplayPose = this.displayPose;
   }
 
@@ -461,13 +534,16 @@ export class BoulderEngine {
     this.climbResult = null;
   }
 
-  private getInspectedAssignment(): LimbAssignment {
+  private getInspectedContacts(): { assignment: LimbAssignment; free: FreeLimbMap } {
     const initial = getInitialAssignment(this.holds, this.profile);
     if (this.inspectedStepIndex < 0 || this.betaTraces.length === 0) {
-      return initial;
+      return { assignment: initial, free: emptyFreeMap() };
     }
     const idx = clamp(this.inspectedStepIndex, 0, this.betaTraces.length - 1);
-    return this.betaTraces[idx].assignmentAfter;
+    return {
+      assignment: this.betaTraces[idx].assignmentAfter,
+      free: this.betaTraces[idx].freeAfter,
+    };
   }
 
   private recomputeBeta(): void {
@@ -484,27 +560,44 @@ export class BoulderEngine {
   private recomputePreviewEvaluations(): void {
     this.previewEvaluations.clear();
     if (this.mode !== 'plan') return;
-    const baseAssign = this.getInspectedAssignment();
+    const { assignment, free } = this.getInspectedContacts();
     for (const h of this.holds) {
-      if (baseAssign[this.activeLimb] === h.id) continue;
-      const ev = evaluateMove(baseAssign, this.activeLimb, h.id, this.holds, this.profile);
+      if (assignment[this.activeLimb] === h.id) continue;
+      const ev = evaluateMove(assignment, free, this.activeLimb, holdTarget(h.id), this.holds, this.profile);
       this.previewEvaluations.set(h.id, ev);
     }
   }
 
   private syncPlanPose(snapImmediately: boolean): void {
     const holdMap = buildHoldMap(this.holds);
-    const assign = this.getInspectedAssignment();
-    const solved = solvePose(assign, holdMap, computeAnatomy(this.profile), this.profile.flexibility);
+    const { assignment, free } = this.getInspectedContacts();
+    const solved = solvePose(
+      assignment,
+      holdMap,
+      computeAnatomy(this.profile),
+      this.profile.flexibility,
+      undefined,
+      freeOverrides(free)
+    );
     this.targetDisplayPose = solved;
     if (snapImmediately) {
       this.displayPose = solved;
     }
   }
 
+  private resolveStepTargetPos(step: BetaStep): Vec2 | null {
+    const t = step.target;
+    if (t.kind === 'hold') {
+      const hold = this.holds.find((x) => x.id === t.holdId);
+      return hold ? { x: hold.x, y: hold.y } : null;
+    }
+    return { x: t.x, y: t.y };
+  }
+
   private beginClimbStep(
     stepIdx: number,
     currentAssignment: LimbAssignment,
+    currentFree: FreeLimbMap,
     startPose: SolvedPose,
     staminaBefore: number,
     elapsedTotal: number,
@@ -514,16 +607,26 @@ export class BoulderEngine {
     const step = this.betaSteps[stepIdx];
     const holdMap = buildHoldMap(this.holds);
     const anatomy = computeAnatomy(this.profile);
-    const targetHold = holdMap.get(step.targetHoldId);
-    const ev = evaluateMove(currentAssignment, step.limb, step.targetHoldId, this.holds, this.profile);
+    const targetPos = this.resolveStepTargetPos(step);
+    const targetHold =
+      step.target.kind === 'hold' ? holdMap.get(step.target.holdId) : undefined;
+    const ev = evaluateMove(
+      currentAssignment,
+      currentFree,
+      step.limb,
+      step.target,
+      this.holds,
+      this.profile
+    );
 
-    const supportAssignment: LimbAssignment = { ...currentAssignment, [step.limb]: null };
+    const support = detachLimb(currentAssignment, currentFree, step.limb);
     const supportPose = solvePose(
-      supportAssignment,
+      support.assignment,
       holdMap,
       anatomy,
       this.profile.flexibility,
-      targetHold ? { limb: step.limb, target: { x: targetHold.x, y: targetHold.y }, strength: 0.9 } : undefined
+      targetPos ? { limb: step.limb, target: targetPos, strength: 0.9 } : undefined,
+      freeOverrides(support.free)
     );
 
     const staminaAfter = Math.max(0, Math.round((staminaBefore - ev.staminaCost) * 10) / 10);
@@ -536,10 +639,13 @@ export class BoulderEngine {
       : '';
 
     const limbName = LIMB_META[step.limb].nameZh;
-    const holdLabel = targetHold ? `#${targetHold.label} ${HOLD_SPECS[targetHold.type].shortZh}` : '';
+    const destLabel =
+      targetHold
+        ? `#${targetHold.label} ${HOLD_SPECS[targetHold.type].shortZh}`
+        : targetLabel(step.target);
     this.climbStatusText = ev.isDyno
-      ? `第 ${stepIdx + 1} 步：${limbName}蓄力动态飞跃 -> ${holdLabel}`
-      : `第 ${stepIdx + 1} 步：重心调整，${limbName}移动 -> ${holdLabel}`;
+      ? `第 ${stepIdx + 1} 步：${limbName}蓄力动态飞跃 -> ${destLabel}`
+      : `第 ${stepIdx + 1} 步：重心调整，${limbName}移动 -> ${destLabel}`;
 
     const nextCruxStrain = ev.staminaCost > cruxStrain ? ev.staminaCost : cruxStrain;
     const nextCruxIdx = ev.staminaCost > cruxStrain ? stepIdx : cruxStepIndex;
@@ -553,6 +659,7 @@ export class BoulderEngine {
       supportPose,
       targetPose: ev.resultingPose,
       currentAssignment,
+      currentFree,
       currentEval: ev,
       willFail,
       failReason,
@@ -663,12 +770,14 @@ export class BoulderEngine {
     const step = this.betaSteps[a.stepIdx];
     const holdMap = buildHoldMap(this.holds);
     const anatomy = computeAnatomy(this.profile);
-    const targetHold = step ? holdMap.get(step.targetHoldId) : undefined;
+    const targetPos = step ? this.resolveStepTargetPos(step) : null;
+    const targetHold =
+      step && step.target.kind === 'hold' ? holdMap.get(step.target.holdId) : undefined;
     const anchoredAll: Record<LimbId, boolean> = {
-      lh: a.currentAssignment.lh !== null,
-      rh: a.currentAssignment.rh !== null,
-      lf: a.currentAssignment.lf !== null,
-      rf: a.currentAssignment.rf !== null,
+      lh: a.currentAssignment.lh !== null || a.currentFree.lh !== null,
+      rh: a.currentAssignment.rh !== null || a.currentFree.rh !== null,
+      lf: a.currentAssignment.lf !== null || a.currentFree.lf !== null,
+      rf: a.currentAssignment.rf !== null || a.currentFree.rf !== null,
     };
 
     if (a.phase === 'shift') {
@@ -729,7 +838,7 @@ export class BoulderEngine {
 
       // Quadratic Bezier arc for the moving limb (clears the wall & never clips through the body)
       const fromPt = a.startPose.limbs[step.limb];
-      const toPt = targetHold ? { x: targetHold.x, y: targetHold.y } : a.targetPose.limbs[step.limb];
+      const toPt = targetPos ?? a.targetPose.limbs[step.limb];
       const destPt = lerpVec(fromPt, toPt, reachFactor);
 
       const sideSign = isLeft ? -1 : 1;
@@ -747,12 +856,14 @@ export class BoulderEngine {
         y: inv * inv * fromPt.y + 2 * inv * moveEase * ctrlPt.y + moveEase * moveEase * destPt.y,
       };
 
-      // Supporting limbs stay 100% locked to their holds (unanchored free limbs follow smoothly)
+      // Supporting limbs stay locked to holds/smears; flags & free limbs follow smoothly
+      const limbPinned = (l: LimbId) =>
+        a.currentAssignment[l] !== null || a.currentFree[l] !== null;
       const limbTargets: Record<LimbId, Vec2> = {
-        lh: a.currentAssignment.lh ? a.startPose.limbs.lh : lerpVec(a.startPose.limbs.lh, a.targetPose.limbs.lh, bodyEase),
-        rh: a.currentAssignment.rh ? a.startPose.limbs.rh : lerpVec(a.startPose.limbs.rh, a.targetPose.limbs.rh, bodyEase),
-        lf: a.currentAssignment.lf ? a.startPose.limbs.lf : lerpVec(a.startPose.limbs.lf, a.targetPose.limbs.lf, bodyEase),
-        rf: a.currentAssignment.rf ? a.startPose.limbs.rf : lerpVec(a.startPose.limbs.rf, a.targetPose.limbs.rf, bodyEase),
+        lh: limbPinned('lh') ? a.startPose.limbs.lh : lerpVec(a.startPose.limbs.lh, a.targetPose.limbs.lh, bodyEase),
+        rh: limbPinned('rh') ? a.startPose.limbs.rh : lerpVec(a.startPose.limbs.rh, a.targetPose.limbs.rh, bodyEase),
+        lf: limbPinned('lf') ? a.startPose.limbs.lf : lerpVec(a.startPose.limbs.lf, a.targetPose.limbs.lf, bodyEase),
+        rf: limbPinned('rf') ? a.startPose.limbs.rf : lerpVec(a.startPose.limbs.rf, a.targetPose.limbs.rf, bodyEase),
       };
       limbTargets[step.limb] = movingPos;
 
@@ -793,8 +904,10 @@ export class BoulderEngine {
           this.climbStatusText = `脱落！${a.failReason}`;
           this.emit();
         } else {
-          if (targetHold) this.spawnChalkPuff({ x: targetHold.x, y: targetHold.y }, 11);
-          a.currentAssignment = { ...a.currentAssignment, [step.limb]: step.targetHoldId };
+          if (targetPos) this.spawnChalkPuff(targetPos, 11);
+          const applied = applyLimbTarget(a.currentAssignment, a.currentFree, step.limb, step.target);
+          a.currentAssignment = applied.assignment;
+          a.currentFree = applied.free;
           this.climbStamina = a.staminaAfterStep;
           a.phase = 'settle';
           a.phaseTime = 0;
@@ -816,10 +929,10 @@ export class BoulderEngine {
         a.targetPose.hipTurn,
         { ...a.targetPose.limbs },
         {
-          lh: a.currentAssignment.lh !== null,
-          rh: a.currentAssignment.rh !== null,
-          lf: a.currentAssignment.lf !== null,
-          rf: a.currentAssignment.rf !== null,
+          lh: a.currentAssignment.lh !== null || a.currentFree.lh !== null,
+          rh: a.currentAssignment.rh !== null || a.currentFree.rh !== null,
+          lf: a.currentAssignment.lf !== null || a.currentFree.lf !== null,
+          rf: a.currentAssignment.rf !== null || a.currentFree.rf !== null,
         },
         anatomy,
         this.profile.flexibility
@@ -837,6 +950,7 @@ export class BoulderEngine {
           this.beginClimbStep(
             a.stepIdx + 1,
             a.currentAssignment,
+            a.currentFree,
             a.targetPose,
             a.staminaAfterStep,
             a.elapsedTotal,
@@ -915,10 +1029,13 @@ export class BoulderEngine {
 
   private render(): void {
     const rect = this.canvas.getBoundingClientRect();
+    const inspected = this.getInspectedContacts();
     const activeAssign =
       this.mode === 'climb' && this.anim
         ? this.anim.currentAssignment
-        : this.getInspectedAssignment();
+        : inspected.assignment;
+    const activeFree =
+      this.mode === 'climb' && this.anim ? this.anim.currentFree : inspected.free;
 
     const strain =
       this.mode === 'climb'
@@ -927,13 +1044,15 @@ export class BoulderEngine {
 
     let lookTarget: Vec2 | null = null;
     if (this.mode === 'climb' && this.anim) {
-      const st = this.betaSteps[this.anim.stepIdx];
-      const h = st ? this.holds.find((x) => x.id === st.targetHoldId) : null;
-      if (h) lookTarget = { x: h.x, y: h.y };
+      lookTarget = this.resolveStepTargetPos(this.betaSteps[this.anim.stepIdx]);
     } else if (this.mode === 'plan' && this.hoveredHoldId) {
       const h = this.holds.find((x) => x.id === this.hoveredHoldId);
       if (h) lookTarget = { x: h.x, y: h.y };
+    } else if (this.mode === 'plan' && this.wallHoverPos) {
+      lookTarget = this.wallHoverPos;
     }
+
+    const limbPinned = (l: LimbId) => activeAssign[l] !== null || activeFree[l] !== null;
 
     // Subtle organic breathing motion on torso/pelvis while keeping anchored hands/feet pinned!
     let renderPose = this.displayPose;
@@ -947,10 +1066,10 @@ export class BoulderEngine {
         this.displayPose.hipTurn,
         { ...this.displayPose.limbs },
         {
-          lh: activeAssign.lh !== null,
-          rh: activeAssign.rh !== null,
-          lf: activeAssign.lf !== null,
-          rf: activeAssign.rf !== null,
+          lh: limbPinned('lh'),
+          rh: limbPinned('rh'),
+          lf: limbPinned('lf'),
+          rf: limbPinned('rf'),
         },
         computeAnatomy(this.profile),
         this.profile.flexibility
@@ -963,9 +1082,12 @@ export class BoulderEngine {
       profile: this.profile,
       pose: renderPose,
       assignment: activeAssign,
+      freeLimbs: activeFree,
       selectedHoldId: this.selectedHoldId,
       hoveredHoldId: this.hoveredHoldId,
       activeLimb: this.activeLimb,
+      planContactMode: this.planContactMode,
+      wallHoverPos: this.wallHoverPos,
       betaSteps: this.betaSteps,
       betaTraces: this.betaTraces,
       inspectedStepIndex: this.inspectedStepIndex,
@@ -1049,27 +1171,20 @@ export class BoulderEngine {
         }
       } else if (this.mode === 'plan') {
         if (hit) {
-          const baseAssign = this.getInspectedAssignment();
-          if (baseAssign[this.activeLimb] === hit.id) {
-            return; // already on this hold
-          }
-          // If user scrubbed back to an earlier step, branch cleanly from there
-          const prefix =
-            this.inspectedStepIndex < this.betaSteps.length - 1
-              ? this.betaSteps.slice(0, this.inspectedStepIndex + 1)
-              : this.betaSteps;
-
-          const newStep: BetaStep = {
-            id: nextUid('step'),
-            limb: this.activeLimb,
-            targetHoldId: hit.id,
-          };
-          this.betaSteps = [...prefix, newStep];
-          this.inspectedStepIndex = this.betaSteps.length - 1;
-          this.recomputeBeta();
-          this.syncPlanPose(false);
-          this.spawnChalkPuff({ x: hit.x, y: hit.y }, 7);
-          this.emit();
+          // Clicking a hold always places a hold contact (regardless of smear/flag mode)
+          this.addBetaTarget(holdTarget(hit.id));
+        } else if (
+          (this.planContactMode === 'smear' || this.planContactMode === 'flag') &&
+          wp.x >= 12 &&
+          wp.x <= WALL_WIDTH_CM - 12 &&
+          wp.y >= 16 &&
+          wp.y <= WALL_HEIGHT_CM - 16
+        ) {
+          const x = Math.round(wp.x);
+          const y = Math.round(wp.y);
+          this.addBetaTarget(
+            this.planContactMode === 'smear' ? smearTarget(x, y) : flagTarget(x, y)
+          );
         }
       }
     });
@@ -1090,15 +1205,48 @@ export class BoulderEngine {
 
       const hit = this.hitTestHold(wp);
       const nextHover = hit ? hit.id : null;
+      let changed = false;
       if (nextHover !== this.hoveredHoldId) {
         this.hoveredHoldId = nextHover;
-        this.emit();
+        changed = true;
       }
+
+      if (this.mode === 'plan' && !hit && (this.planContactMode === 'smear' || this.planContactMode === 'flag')) {
+        const onWall =
+          wp.x >= 12 && wp.x <= WALL_WIDTH_CM - 12 && wp.y >= 16 && wp.y <= WALL_HEIGHT_CM - 16;
+        if (onWall) {
+          const pos = { x: Math.round(wp.x), y: Math.round(wp.y) };
+          this.wallHoverPos = pos;
+          const { assignment, free } = this.getInspectedContacts();
+          const target =
+            this.planContactMode === 'smear' ? smearTarget(pos.x, pos.y) : flagTarget(pos.x, pos.y);
+          this.wallHoverEval = evaluateMove(
+            assignment,
+            free,
+            this.activeLimb,
+            target,
+            this.holds,
+            this.profile
+          );
+          changed = true;
+        } else if (this.wallHoverPos) {
+          this.wallHoverPos = null;
+          this.wallHoverEval = null;
+          changed = true;
+        }
+      } else if (this.wallHoverPos) {
+        this.wallHoverPos = null;
+        this.wallHoverEval = null;
+        changed = true;
+      }
+
+      if (changed) this.emit();
 
       if (this.mode === 'setter') {
         this.canvas.style.cursor = hit ? 'grab' : 'crosshair';
       } else if (this.mode === 'plan') {
-        this.canvas.style.cursor = hit ? 'pointer' : 'default';
+        this.canvas.style.cursor =
+          hit || this.planContactMode !== 'hold' ? 'pointer' : 'default';
       } else {
         this.canvas.style.cursor = 'default';
       }
@@ -1141,6 +1289,7 @@ export class BoulderEngine {
       this.mode === 'plan' && this.hoveredHoldId
         ? this.previewEvaluations.get(this.hoveredHoldId) ?? null
         : null;
+    const inspected = this.getInspectedContacts();
 
     this.onChange({
       mode: this.mode,
@@ -1153,6 +1302,7 @@ export class BoulderEngine {
       brush: this.brush,
       profile: this.profile,
       activeLimb: this.activeLimb,
+      planContactMode: this.planContactMode,
       betaSteps: this.betaSteps,
       betaTraces: this.betaTraces,
       inspectedStepIndex: this.inspectedStepIndex,
@@ -1160,6 +1310,8 @@ export class BoulderEngine {
       betaFirstFailure: this.betaFirstFailure,
       betaFinalStamina: this.betaFinalStamina,
       hoveredEval,
+      wallHoverEval: this.wallHoverEval,
+      inspectedFree: inspected.free,
       showReachArc: this.showReachArc,
       showComLine: this.showComLine,
       showBetaArrows: this.showBetaArrows,

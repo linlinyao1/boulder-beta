@@ -1,16 +1,28 @@
 import { computeAnatomy } from './climber';
+import {
+  applyLimbTarget,
+  detachLimb,
+  emptyFreeMap,
+  freeOverrides,
+  getLimbWorldPos,
+  supportingLimbs,
+} from './contact';
 import { getHoldOptimalPullDir, HOLD_SPECS, LIMB_META } from './holds';
 import { clamp, dist, doLegsIntersect, solvePose } from './ik';
 import {
   BetaStep,
   ClimberProfile,
+  FreeLimbMap,
   Hold,
   LimbAssignment,
   LimbId,
+  LimbTarget,
   MoveEvaluation,
   MoveRating,
   SolvedPose,
   Vec2,
+  WALL_HEIGHT_CM,
+  WALL_WIDTH_CM,
 } from './types';
 
 export function buildHoldMap(holds: Hold[]): Map<string, Hold> {
@@ -136,424 +148,411 @@ function computeHoldAlignment(
   }
 }
 
+function failEval(
+  pose: SolvedPose,
+  reason: string,
+  extras: Partial<MoveEvaluation> = {}
+): MoveEvaluation {
+  return {
+    feasible: false,
+    rating: 'fail',
+    reachRatio: extras.reachRatio ?? 1.5,
+    reachExcessCm: extras.reachExcessCm ?? 20,
+    isDyno: extras.isDyno ?? false,
+    gripScore: extras.gripScore ?? 0,
+    balanceScore: extras.balanceScore ?? 20,
+    barnDoorRisk: extras.barnDoorRisk ?? 0.5,
+    directionAlignment: extras.directionAlignment ?? 0.4,
+    staminaCost: extras.staminaCost ?? 12,
+    failReason: reason,
+    warnings: extras.warnings ?? [],
+    resultingPose: pose,
+  };
+}
+
+function supportPointPos(
+  limb: LimbId,
+  assignment: LimbAssignment,
+  free: FreeLimbMap,
+  holdMap: Map<string, Hold>
+): Vec2 | null {
+  return getLimbWorldPos(limb, assignment, free, holdMap);
+}
+
 /**
- * Evaluates a single planned climbing move: moving `limb` from its current state to `targetHoldId`.
+ * Evaluates a planned climbing move onto a hold, wall smear, or dangling flag.
  */
 export function evaluateMove(
   prevAssignment: LimbAssignment,
+  prevFree: FreeLimbMap,
   limb: LimbId,
-  targetHoldId: string,
+  target: LimbTarget,
   holds: Hold[],
   profile: ClimberProfile
 ): MoveEvaluation {
   const holdMap = buildHoldMap(holds);
-  const targetHold = holdMap.get(targetHoldId);
   const anatomy = computeAnatomy(profile);
   const isHand = LIMB_META[limb].isHand;
+  const warnings: string[] = [];
 
-  const fallbackPose = solvePose(prevAssignment, holdMap, anatomy, profile.flexibility);
-
-  if (!targetHold) {
-    return {
-      feasible: false,
-      rating: 'fail',
-      reachRatio: 2,
-      reachExcessCm: 99,
-      isDyno: false,
-      gripScore: 0,
-      balanceScore: 0,
-      barnDoorRisk: 1,
-      directionAlignment: 0,
-      staminaCost: 0,
-      failReason: '目标岩点不存在',
-      warnings: [],
-      resultingPose: fallbackPose,
-    };
-  }
-
-  // Support pose while moving limb lets go and shifts toward target
-  const supportAssignment: LimbAssignment = { ...prevAssignment, [limb]: null };
-  const supportPose = solvePose(
-    supportAssignment,
+  const fallbackPose = solvePose(
+    prevAssignment,
     holdMap,
     anatomy,
     profile.flexibility,
-    { limb, target: { x: targetHold.x, y: targetHold.y }, strength: 0.92 }
+    undefined,
+    freeOverrides(prevFree)
   );
 
-  // Target landing pose
-  const nextAssignment: LimbAssignment = { ...prevAssignment, [limb]: targetHoldId };
-  const nextPose = solvePose(nextAssignment, holdMap, anatomy, profile.flexibility);
+  let targetPos: Vec2;
+  let targetHold: Hold | null = null;
+  if (target.kind === 'hold') {
+    targetHold = holdMap.get(target.holdId) ?? null;
+    if (!targetHold) {
+      return failEval(fallbackPose, '目标岩点不存在', { reachRatio: 2, reachExcessCm: 99 });
+    }
+    targetPos = { x: targetHold.x, y: targetHold.y };
+  } else {
+    targetPos = { x: target.x, y: target.y };
+    if (
+      targetPos.x < 8 ||
+      targetPos.x > WALL_WIDTH_CM - 8 ||
+      targetPos.y < 10 ||
+      targetPos.y > WALL_HEIGHT_CM - 10
+    ) {
+      return failEval(fallbackPose, '目标位置超出岩墙范围');
+    }
+  }
 
-  const warnings: string[] = [];
+  const support = detachLimb(prevAssignment, prevFree, limb);
+  const supportPose = solvePose(
+    support.assignment,
+    holdMap,
+    anatomy,
+    profile.flexibility,
+    { limb, target: targetPos, strength: 0.92 },
+    freeOverrides(support.free)
+  );
 
-  // 1. Check remaining anchor support during transition
-  const remainingHands = (['lh', 'rh'] as LimbId[]).filter((l) => supportAssignment[l] !== null);
-  const remainingFeet = (['lf', 'rf'] as LimbId[]).filter((l) => supportAssignment[l] !== null);
+  const next = applyLimbTarget(prevAssignment, prevFree, limb, target);
+  const nextPose = solvePose(
+    next.assignment,
+    holdMap,
+    anatomy,
+    profile.flexibility,
+    undefined,
+    freeOverrides(next.free)
+  );
+
+  // 1. Remaining support during transition (holds + smears count; flags do not)
+  const remainingHands = supportingLimbs(support.assignment, support.free, ['lh', 'rh']);
+  const remainingFeet = supportingLimbs(support.assignment, support.free, ['lf', 'rf']);
   const remainingAll = [...remainingHands, ...remainingFeet];
+  const flagFeet = (['lf', 'rf'] as LimbId[]).filter((l) => support.free[l]?.mode === 'flag');
 
   const isLowStartStanding =
     remainingHands.length === 0 &&
     remainingFeet.length >= 1 &&
-    targetHold.y < anatomy.heightCm * 1.12;
+    targetPos.y < anatomy.heightCm * 1.12;
 
-  if (remainingHands.length === 0 && !isLowStartStanding) {
-    return {
-      feasible: false,
-      rating: 'fail',
-      reachRatio: 1.5,
-      reachExcessCm: 30,
-      isDyno: false,
-      gripScore: 0,
-      balanceScore: 0,
-      barnDoorRisk: 1,
-      directionAlignment: 0,
-      staminaCost: 25,
-      failReason: '双手同时离墙且重心过高，无法抓稳岩壁',
-      warnings,
-      resultingPose: nextPose,
-    };
+  if (remainingHands.length === 0 && !isLowStartStanding && target.kind !== 'flag') {
+    // Flagging a hand while already without hands is always bad; smear/hold needs hand support
+    if (!(target.kind === 'smear' && !isHand && remainingFeet.length >= 1)) {
+      return failEval(nextPose, '双手同时离墙且无可靠支点，无法稳住', {
+        staminaCost: 22,
+        barnDoorRisk: 1,
+      });
+    }
   }
 
-  // 2. Reachability check (both during reach AND at landing span)
+  // 2. Reachability
   const limbRoot = isHand
     ? supportPose.shoulders[limb as 'lh' | 'rh']
     : supportPose.hips[limb as 'lf' | 'rf'];
   const maxLimbReach = isHand ? anatomy.maxArmReach : anatomy.maxLegReach;
-  const distToTarget = dist(limbRoot, { x: targetHold.x, y: targetHold.y });
-  const reachFromSupport = distToTarget / maxLimbReach;
-
-  // Also check if landing pose forces any anchored limb beyond physical limit
+  const reachFromSupport = dist(limbRoot, targetPos) / maxLimbReach;
   const maxAnchorStretch = Math.max(
     nextPose.stretchRatios.lh,
     nextPose.stretchRatios.rh,
     nextPose.stretchRatios.lf,
     nextPose.stretchRatios.rf
   );
-
   const effectiveReach = Math.max(reachFromSupport, maxAnchorStretch);
   const staticLimit = isHand ? 1.035 : 1.045;
-  const dynoLimit = isHand ? 1.21 : 1.045; // feet don't dyno
+  const dynoLimit = isHand && target.kind === 'hold' ? 1.21 : target.kind === 'hold' ? 1.045 : 1.02;
 
   const hasPushFoot = remainingFeet.some((fl) => {
-    const fh = holdMap.get(supportAssignment[fl]!);
-    return fh && fh.y < supportPose.pelvis.y + 18;
+    const p = supportPointPos(fl, support.assignment, support.free, holdMap);
+    return p && p.y < supportPose.pelvis.y + 18;
   });
 
   let isDyno = false;
   const reachExcessCm = Math.max(0, (effectiveReach - staticLimit) * maxLimbReach);
 
-  if (effectiveReach > dynoLimit || (!hasPushFoot && effectiveReach > staticLimit)) {
+  if (effectiveReach > dynoLimit || (!hasPushFoot && effectiveReach > staticLimit && target.kind === 'hold')) {
     const gapCm = Math.max(1, Math.round((effectiveReach - staticLimit) * maxLimbReach));
-    const reason = isHand
-      ? hasPushFoot
-        ? `${LIMB_META[limb].nameZh}够不到 #${targetHold.label}（差约 ${gapCm}cm），建议先垫高脚点或增大臂展`
-        : `${LIMB_META[limb].nameZh}够不到 #${targetHold.label}（差约 ${gapCm}cm），且缺少踩脚点无法发力起跳`
-      : `${LIMB_META[limb].nameZh}跨距过大，够不到 #${targetHold.label} 脚点（差约 ${gapCm}cm）`;
-
-    return {
-      feasible: false,
-      rating: 'fail',
-      reachRatio: effectiveReach,
-      reachExcessCm: gapCm,
-      isDyno: false,
-      gripScore: 0,
-      balanceScore: 20,
-      barnDoorRisk: 0.3,
-      directionAlignment: 0.5,
-      staminaCost: 14,
-      failReason: reason,
-      warnings,
-      resultingPose: nextPose,
-    };
+    const label =
+      target.kind === 'hold' && targetHold
+        ? `#${targetHold.label}`
+        : target.kind === 'smear'
+          ? '踩墙位置'
+          : '悬空位置';
+    return failEval(
+      nextPose,
+      `${LIMB_META[limb].nameZh}够不到${label}（差约 ${gapCm}cm）`,
+      { reachRatio: effectiveReach, reachExcessCm: gapCm, staminaCost: 14 }
+    );
   }
 
-  if (isHand && effectiveReach > staticLimit && effectiveReach <= dynoLimit && hasPushFoot) {
+  if (isHand && target.kind === 'hold' && effectiveReach > staticLimit && effectiveReach <= dynoLimit && hasPushFoot) {
     isDyno = true;
-    warnings.push(`动态飞跃 (Dyno / 死点出手)，需稳稳接住 #${targetHold.label}`);
+    warnings.push(`动态飞跃 (Dyno)，需稳稳接住 #${targetHold!.label}`);
   } else if (effectiveReach > 0.92) {
-    warnings.push(`${LIMB_META[limb].nameZh}接近极限伸展，体能消耗增大`);
+    warnings.push(`${LIMB_META[limb].nameZh}接近极限伸展`);
   }
 
-  // 2.5 Anatomical legality: prevent inhuman leg pass-throughs, bone intersections & tangled crosses
-  const nextLfHold = nextAssignment.lf ? holdMap.get(nextAssignment.lf) : undefined;
-  const nextRfHold = nextAssignment.rf ? holdMap.get(nextAssignment.rf) : undefined;
-  if (nextLfHold && nextRfHold) {
-    if (nextLfHold.x > nextRfHold.x + 6) {
-      return {
-        feasible: false,
-        rating: 'fail',
+  // 2.5 Anatomical legality for feet (holds + smears)
+  const lfPos = getLimbWorldPos('lf', next.assignment, next.free, holdMap);
+  const rfPos = getLimbWorldPos('rf', next.assignment, next.free, holdMap);
+  if (lfPos && rfPos) {
+    if (lfPos.x > rfPos.x + 8) {
+      return failEval(nextPose, '双脚反向交叉穿越（左脚不可跨到右脚右侧）', {
         reachRatio: effectiveReach,
         reachExcessCm,
-        isDyno: false,
-        gripScore: 0,
-        balanceScore: 15,
-        barnDoorRisk: 0.6,
-        directionAlignment: 0.5,
-        staminaCost: 12,
-        failReason: '双脚反向交叉穿越（左脚不可跨到右脚右侧），请先移走对侧脚或做换脚',
-        warnings,
-        resultingPose: nextPose,
-      };
+      });
     }
     if (doLegsIntersect(nextPose)) {
-      return {
-        feasible: false,
-        rating: 'fail',
+      return failEval(nextPose, '双腿骨骼发生交叉碰撞，人体无法完成此脚法', {
         reachRatio: effectiveReach,
         reachExcessCm,
-        isDyno: false,
-        gripScore: 0,
-        balanceScore: 15,
-        barnDoorRisk: 0.6,
-        directionAlignment: 0.5,
-        staminaCost: 12,
-        failReason: '双腿骨骼发生交叉碰撞，人体无法完成此脚法',
-        warnings,
-        resultingPose: nextPose,
-      };
+      });
     }
   }
 
-  // Prevent high single-leg hip twist past opposite side of pelvis
-  if (!isHand) {
+  if (!isHand && (target.kind === 'hold' || target.kind === 'smear')) {
     const crossOffset =
-      limb === 'lf' ? targetHold.x - nextPose.pelvis.x : nextPose.pelvis.x - targetHold.x;
-    const isHighFoot = targetHold.y > nextPose.pelvis.y - 34;
-    if (crossOffset > (isHighFoot ? 20 : 34)) {
-      return {
-        feasible: false,
-        rating: 'fail',
+      limb === 'lf' ? targetPos.x - nextPose.pelvis.x : nextPose.pelvis.x - targetPos.x;
+    const isHighFoot = targetPos.y > nextPose.pelvis.y - 34;
+    if (crossOffset > (isHighFoot ? 22 : 36)) {
+      return failEval(nextPose, `${LIMB_META[limb].nameZh}跨过身体中线过深，髋关节无法扭转到位`, {
         reachRatio: effectiveReach,
         reachExcessCm,
-        isDyno: false,
-        gripScore: 0,
-        balanceScore: 20,
-        barnDoorRisk: 0.55,
-        directionAlignment: 0.4,
-        staminaCost: 12,
-        failReason: `${LIMB_META[limb].nameZh}跨过身体中线过深，髋关节无法扭转到位`,
-        warnings,
-        resultingPose: nextPose,
-      };
+      });
     }
   }
 
-  // Prevent extreme tangled flat hand-cross (allow clean vertical cross-throughs!)
-  const nextLhHold = nextAssignment.lh ? holdMap.get(nextAssignment.lh) : undefined;
-  const nextRhHold = nextAssignment.rh ? holdMap.get(nextAssignment.rh) : undefined;
-  if (nextLhHold && nextRhHold && nextLhHold.id !== nextRhHold.id) {
-    const handCrossX = nextLhHold.x - nextRhHold.x;
-    const handDiffY = Math.abs(nextLhHold.y - nextRhHold.y);
+  const nextLh = getLimbWorldPos('lh', next.assignment, next.free, holdMap);
+  const nextRh = getLimbWorldPos('rh', next.assignment, next.free, holdMap);
+  if (
+    next.assignment.lh &&
+    next.assignment.rh &&
+    next.assignment.lh !== next.assignment.rh &&
+    nextLh &&
+    nextRh
+  ) {
+    const handCrossX = nextLh.x - nextRh.x;
+    const handDiffY = Math.abs(nextLh.y - nextRh.y);
     if (handCrossX > 34 || (handCrossX > 18 && handDiffY < 26)) {
-      return {
-        feasible: false,
-        rating: 'fail',
+      return failEval(nextPose, '双臂过度交叉缠绕，请调整左右手顺序', {
         reachRatio: effectiveReach,
         reachExcessCm,
-        isDyno: false,
-        gripScore: 0,
-        balanceScore: 25,
-        barnDoorRisk: 0.5,
-        directionAlignment: 0.4,
-        staminaCost: 14,
-        failReason: '双臂过度交叉缠绕，请调整左右手顺序',
-        warnings,
-        resultingPose: nextPose,
-      };
+      });
     }
-    if (handCrossX > 10) {
-      warnings.push('交叉手动作（Cross），注意转髋贴壁');
-    }
+    if (handCrossX > 10) warnings.push('交叉手动作（Cross），注意转髋贴壁');
   }
 
-  // 3. Hold quality & directional pull alignment
-  const spec = HOLD_SPECS[targetHold.type];
-  const { alignment, angleDiffDeg } = computeHoldAlignment(targetHold, limb, nextPose);
-
-  // Strength-to-weight modifier: lighter & stronger climbers get better grip security
+  // 3. Contact quality
   const strengthToWeight = (profile.gripStrength / 92) / Math.pow(anatomy.weightFactor, 0.52);
+  let alignment = 0.85;
+  let gripScore = 70;
+  let baseGrip = 0.7;
+  let staminaMult = 1;
 
-  const baseGrip = isHand ? spec.handGrip : spec.footGrip;
-  const gripRaw = baseGrip * alignment * clamp(strengthToWeight, 0.72, 1.32);
-  const gripScore = clamp(Math.round(gripRaw * 100), 0, 100);
+  if (target.kind === 'hold' && targetHold) {
+    const spec = HOLD_SPECS[targetHold.type];
+    const alignInfo = computeHoldAlignment(targetHold, limb, nextPose);
+    alignment = alignInfo.alignment;
+    baseGrip = isHand ? spec.handGrip : spec.footGrip;
+    gripScore = clamp(Math.round(baseGrip * alignment * clamp(strengthToWeight, 0.72, 1.32) * 100), 0, 100);
+    staminaMult = spec.staminaMultiplier;
 
-  if (isHand && targetHold.type === 'foothold') {
-    return {
-      feasible: false,
-      rating: 'fail',
-      reachRatio: effectiveReach,
-      reachExcessCm,
-      isDyno,
-      gripScore,
-      balanceScore: 40,
-      barnDoorRisk: 0.4,
-      directionAlignment: alignment,
-      staminaCost: 16,
-      failReason: `#${targetHold.label} 是小脚点，手指无法抓稳`,
-      warnings,
-      resultingPose: nextPose,
-    };
+    if (isHand && targetHold.type === 'foothold') {
+      return failEval(nextPose, `#${targetHold.label} 是小脚点，手指无法抓稳`, {
+        reachRatio: effectiveReach,
+        reachExcessCm,
+        isDyno,
+        gripScore,
+        directionAlignment: alignment,
+      });
+    }
+    if (isHand && alignment < 0.28) {
+      return failEval(
+        nextPose,
+        `#${targetHold.label} ${spec.shortZh}发力方向偏离 ${Math.round(alignInfo.angleDiffDeg)}°，手掌打滑脱落`,
+        { reachRatio: effectiveReach, reachExcessCm, isDyno, gripScore, directionAlignment: alignment }
+      );
+    }
+    if (isDyno && baseGrip * alignment < 0.44) {
+      return failEval(nextPose, `动态飞跃未能抓稳 #${targetHold.label}`, {
+        reachRatio: effectiveReach,
+        reachExcessCm,
+        isDyno: true,
+        gripScore,
+        directionAlignment: alignment,
+        staminaCost: 22,
+      });
+    }
+    if (isHand && alignment < 0.58) {
+      warnings.push(`#${targetHold.label} 抓握角度偏斜，握力消耗加剧`);
+    }
+  } else if (target.kind === 'smear') {
+    // Friction smear: better for feet, weak for hands; needs CoM pressing into wall
+    // Feet: weight pressing down onto smear; Hands: CoM close to contact in X
+    const lateral = clamp(1 - Math.abs(nextPose.com.x - targetPos.x) / (isHand ? 55 : 75), 0.25, 1);
+    const verticalPress = isHand
+      ? 0.85
+      : clamp(0.45 + (nextPose.pelvis.y - targetPos.y) / 90, 0.4, 1);
+    const pressIntoWall = lateral * verticalPress;
+    const heightOk = isHand
+      ? targetPos.y < nextPose.chest.y + 8 && targetPos.y > nextPose.pelvis.y - 40
+      : targetPos.y < nextPose.pelvis.y + 12 && targetPos.y > nextPose.pelvis.y - anatomy.maxLegReach * 0.95;
+    if (!heightOk) {
+      return failEval(
+        nextPose,
+        isHand ? '蹭墙手位过高或过低，无法产生有效摩擦力' : '踩墙位置过高或过低，无法有效顶墙',
+        { reachRatio: effectiveReach, reachExcessCm }
+      );
+    }
+    baseGrip = isHand ? 0.28 : 0.58;
+    alignment = pressIntoWall * (isHand ? 0.75 : 0.95);
+    gripScore = clamp(
+      Math.round(baseGrip * alignment * clamp(strengthToWeight, 0.7, 1.25) * 100),
+      0,
+      100
+    );
+    staminaMult = isHand ? 1.55 : 1.15;
+    warnings.push(isHand ? '蹭墙摩擦手，仅作短暂过渡' : '踩墙（Smear），靠鞋底摩擦与重心压墙');
+    if (gripScore < 16) {
+      return failEval(nextPose, '踩墙/蹭墙摩擦力不足，请把重心更靠近接触点', {
+        reachRatio: effectiveReach,
+        reachExcessCm,
+        gripScore,
+        directionAlignment: alignment,
+      });
+    }
+  } else {
+    // Flag: dangling counterbalance — not a support, but can stabilize barn-door
+    baseGrip = 0;
+    alignment = 0.9;
+    gripScore = 0;
+    staminaMult = isHand ? 0.55 : 0.4;
+    const sideOk =
+      (LIMB_META[limb].side === 'left' && targetPos.x <= nextPose.pelvis.x + 8) ||
+      (LIMB_META[limb].side === 'right' && targetPos.x >= nextPose.pelvis.x - 8);
+    if (!sideOk && Math.abs(targetPos.x - nextPose.pelvis.x) > 28) {
+      warnings.push('悬空配重越过身体中线较深，控制难度上升');
+    }
+    warnings.push(isHand ? '手部悬空配重（Flag）' : '脚部悬空配重（Flag），利用摆腿稳定重心');
   }
 
-  if (isHand && alignment < 0.28) {
-    return {
-      feasible: false,
-      rating: 'fail',
-      reachRatio: effectiveReach,
-      reachExcessCm,
-      isDyno,
-      gripScore,
-      balanceScore: 35,
-      barnDoorRisk: 0.5,
-      directionAlignment: alignment,
-      staminaCost: 18,
-      failReason: `#${targetHold.label} ${spec.shortZh}发力方向偏离 ${Math.round(angleDiffDeg)}°，手掌打滑脱落`,
-      warnings,
-      resultingPose: nextPose,
-    };
-  }
-
-  if (isDyno && baseGrip * alignment < 0.44) {
-    return {
-      feasible: false,
-      rating: 'fail',
-      reachRatio: effectiveReach,
-      reachExcessCm,
-      isDyno: true,
-      gripScore,
-      balanceScore: 28,
-      barnDoorRisk: 0.55,
-      directionAlignment: alignment,
-      staminaCost: 22,
-      failReason: `动态飞跃未能抓稳 #${targetHold.label}（${spec.shortZh}抓握面不足）`,
-      warnings,
-      resultingPose: nextPose,
-    };
-  }
-
-  if (isHand && alignment < 0.58) {
-    warnings.push(`#${targetHold.label} 抓握角度偏斜 (${Math.round(angleDiffDeg)}°)，握力消耗加剧`);
-  }
-
-  // 4. Barn-door & Center of Mass stability check during the 3-point support phase
+  // 4. Barn-door using holds + smear support points
   let barnDoorRisk = 0;
+  const getSupPts = (): Vec2[] =>
+    remainingAll
+      .map((l) => supportPointPos(l, support.assignment, support.free, holdMap))
+      .filter((p): p is Vec2 => Boolean(p));
+
   if (remainingAll.length >= 2 && remainingHands.length >= 1) {
-    const supPts = remainingAll.map((l) => holdMap.get(supportAssignment[l]!)!).filter(Boolean);
+    const supPts = getSupPts();
     const minX = Math.min(...supPts.map((p) => p.x));
     const maxX = Math.max(...supPts.map((p) => p.x));
     const spanX = maxX - minX;
     const comX = supportPose.com.x;
-
-    // Distance of CoM outside support horizontal span
     const outsideDist = comX < minX ? minX - comX : comX > maxX ? comX - maxX : 0;
-
-    // Check same-side alignment (e.g., only right hand + right foot when moving left hand)
     const onlyOneHand = remainingHands.length === 1;
     const onlyOneFoot = remainingFeet.length === 1;
     const sameSide =
       onlyOneHand &&
       onlyOneFoot &&
       LIMB_META[remainingHands[0]].side === LIMB_META[remainingFeet[0]].side;
-
-    // Also check if all support points are almost collinear vertically (narrow base)
     const narrowBaseFactor = spanX < 18 ? 0.25 : 0;
-    const freeFootFlagRelief = remainingFeet.length < 2 ? 0.16 : 0;
+    // Flagging the free foot/hand opposite the support side reduces barn-door
+    const flagRelief = flagFeet.length > 0 || (target.kind === 'flag' && !isHand) ? 0.22 : remainingFeet.length < 2 ? 0.08 : 0;
 
     barnDoorRisk = clamp(
-      outsideDist / 48 + (sameSide ? 0.32 : 0) + narrowBaseFactor - freeFootFlagRelief,
+      outsideDist / 48 + (sameSide ? 0.32 : 0) + narrowBaseFactor - flagRelief,
       0,
       1
     );
-
-    // Extra torque if remaining hand is a bad hold during a single-hand lock-off
-    if (onlyOneHand) {
-      const holdHand = holdMap.get(supportAssignment[remainingHands[0]]!);
-      if (holdHand) {
-        const { alignment: supAlign } = computeHoldAlignment(
-          holdHand,
-          remainingHands[0],
-          supportPose
-        );
-        const supGrip = HOLD_SPECS[holdHand.type].handGrip * supAlign;
-        if (supGrip < 0.36 && remainingFeet.length === 0) {
-          barnDoorRisk = clamp(barnDoorRisk + 0.35, 0, 1);
-        }
-      }
-    }
   } else if (remainingAll.length === 1 && !isLowStartStanding) {
-    // Hanging by a single limb only!
-    barnDoorRisk = 0.85;
+    barnDoorRisk = target.kind === 'flag' ? 0.72 : 0.85;
+  } else if (remainingAll.length === 0 && !isLowStartStanding) {
+    barnDoorRisk = 1;
+  }
+
+  // After landing a smear, weak friction increases risk
+  if (target.kind === 'smear' && gripScore < 40) {
+    barnDoorRisk = clamp(barnDoorRisk + 0.12, 0, 1);
   }
 
   if (barnDoorRisk > 0.82 && !isLowStartStanding) {
-    return {
-      feasible: false,
-      rating: 'fail',
+    return failEval(nextPose, '支点集中在同侧导致开门失衡，可对侧踩墙/悬空配重或换脚稳住', {
       reachRatio: effectiveReach,
       reachExcessCm,
       isDyno,
       gripScore,
-      balanceScore: Math.round((1 - barnDoorRisk) * 100),
       barnDoorRisk,
+      balanceScore: Math.round((1 - barnDoorRisk) * 100),
       directionAlignment: alignment,
       staminaCost: 20,
-      failReason: '支点集中在同侧导致开门失衡 (Barn-door)，先调整对侧脚点稳住重心',
       warnings,
-      resultingPose: nextPose,
-    };
+    });
   }
+  if (barnDoorRisk > 0.5) warnings.push('重心偏离支点轴线，有开门摆荡趋势');
 
-  if (barnDoorRisk > 0.5) {
-    warnings.push('重心偏离支点轴线，有开门摆荡趋势');
-  }
-
-  // 5. Flexibility / high-step scrunch check
-  if (nextPose.scrunchPenalty > 0.82) {
-    return {
-      feasible: false,
-      rating: 'fail',
+  // 5. Scrunch
+  if (nextPose.scrunchPenalty > 0.82 && target.kind !== 'flag') {
+    return failEval(nextPose, '高脚/折叠姿态超出当前柔韧度上限', {
       reachRatio: effectiveReach,
       reachExcessCm,
       isDyno,
       gripScore,
-      balanceScore: 30,
       barnDoorRisk,
       directionAlignment: alignment,
-      staminaCost: 16,
-      failReason: `高脚/折叠姿态超出当前柔韧度上限，无法踩稳 #${targetHold.label}`,
       warnings,
-      resultingPose: nextPose,
-    };
+    });
   }
+  if (nextPose.scrunchPenalty > 0.42) warnings.push('高脚折叠幅度较大，发力较吃力');
 
-  if (nextPose.scrunchPenalty > 0.42) {
-    warnings.push('高脚折叠幅度较大，发力较吃力');
-  }
-
-  // 6. Stamina cost calculation
+  // 6. Stamina
   const footSupportFactor =
-    remainingFeet.length >= 2 ? 0.78 : remainingFeet.length === 1 ? 1.0 : 1.75; // campusing hurts!
+    remainingFeet.length >= 2 ? 0.78 : remainingFeet.length === 1 ? 1.0 : 1.75;
   const reachFactor = isDyno ? 1.65 : effectiveReach > 0.9 ? 1.32 : 1.0;
   const alignFactor = 1 + (1 - alignment) * 0.9;
   const scrunchFactor = 1 + nextPose.scrunchPenalty * 0.45;
   const barnDoorFactor = 1 + barnDoorRisk * 0.5;
   const weightVsGrip = anatomy.weightFactor / (profile.gripStrength / 92);
+  const baseCost =
+    target.kind === 'flag'
+      ? isHand
+        ? 3.2
+        : 2.4
+      : target.kind === 'smear'
+        ? isHand
+          ? 9.5
+          : 4.8
+        : isHand
+          ? 7.8 * staminaMult
+          : 3.6;
 
-  const baseCost = isHand ? 7.8 * spec.staminaMultiplier : 3.6;
-  const staminaCost = Math.round(
-    clamp(
-      baseCost *
-        footSupportFactor *
-        reachFactor *
-        alignFactor *
-        scrunchFactor *
-        barnDoorFactor *
-        weightVsGrip,
-      2,
-      36
-    ) * 10
-  ) / 10;
+  const staminaCost =
+    Math.round(
+      clamp(
+        baseCost * footSupportFactor * reachFactor * alignFactor * scrunchFactor * barnDoorFactor * weightVsGrip,
+        2,
+        36
+      ) * 10
+    ) / 10;
 
   const balanceScore = clamp(
     Math.round((1 - barnDoorRisk * 0.75 - nextPose.scrunchPenalty * 0.25) * 100),
@@ -562,9 +561,14 @@ export function evaluateMove(
   );
 
   let rating: MoveRating = 'solid';
-  if (isDyno) {
-    rating = 'dyno';
-  } else if (effectiveReach > 0.92 || gripScore < 58 || barnDoorRisk > 0.48 || staminaCost > 16) {
+  if (isDyno) rating = 'dyno';
+  else if (
+    effectiveReach > 0.92 ||
+    (target.kind !== 'flag' && gripScore < 58) ||
+    barnDoorRisk > 0.48 ||
+    staminaCost > 16 ||
+    target.kind === 'smear'
+  ) {
     rating = 'hard';
   }
 
@@ -585,6 +589,18 @@ export function evaluateMove(
   };
 }
 
+/** Convenience wrapper for hold-only moves (tests / AI solver). */
+export function evaluateHoldMove(
+  prevAssignment: LimbAssignment,
+  limb: LimbId,
+  targetHoldId: string,
+  holds: Hold[],
+  profile: ClimberProfile,
+  prevFree: FreeLimbMap = emptyFreeMap()
+): MoveEvaluation {
+  return evaluateMove(prevAssignment, prevFree, limb, { kind: 'hold', holdId: targetHoldId }, holds, profile);
+}
+
 export function isTopReached(assignment: LimbAssignment, holds: Hold[]): boolean {
   const topIds = new Set(holds.filter((h) => h.role === 'top').map((h) => h.id));
   if (topIds.size === 0) return false;
@@ -600,6 +616,8 @@ export interface BetaTraceStep {
   step: BetaStep;
   assignmentBefore: LimbAssignment;
   assignmentAfter: LimbAssignment;
+  freeBefore: FreeLimbMap;
+  freeAfter: FreeLimbMap;
   evaluation: MoveEvaluation;
   staminaAfter: number;
   pumpedOut: boolean;
@@ -612,23 +630,33 @@ export function evaluateBetaSequence(
   initialAssignment: LimbAssignment,
   steps: BetaStep[],
   holds: Hold[],
-  profile: ClimberProfile
+  profile: ClimberProfile,
+  initialFree: FreeLimbMap = emptyFreeMap()
 ): {
   traces: BetaTraceStep[];
   finalAssignment: LimbAssignment;
+  finalFree: FreeLimbMap;
   finalStamina: number;
   reachesTop: boolean;
   firstFailureIndex: number | null;
 } {
   let current = { ...initialAssignment };
+  let free = emptyFreeMap();
+  // copy initial free
+  free = {
+    lh: initialFree.lh ? { ...initialFree.lh } : null,
+    rh: initialFree.rh ? { ...initialFree.rh } : null,
+    lf: initialFree.lf ? { ...initialFree.lf } : null,
+    rf: initialFree.rf ? { ...initialFree.rf } : null,
+  };
   let stamina = 100;
   let firstFailureIndex: number | null = null;
   const traces: BetaTraceStep[] = [];
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
-    const evaluation = evaluateMove(current, step.limb, step.targetHoldId, holds, profile);
-    const next = { ...current, [step.limb]: step.targetHoldId };
+    const evaluation = evaluateMove(current, free, step.limb, step.target, holds, profile);
+    const applied = applyLimbTarget(current, free, step.limb, step.target);
     stamina = Math.max(0, Math.round((stamina - evaluation.staminaCost) * 10) / 10);
     const pumpedOut = stamina <= 0;
 
@@ -639,13 +667,21 @@ export function evaluateBetaSequence(
     traces.push({
       step,
       assignmentBefore: { ...current },
-      assignmentAfter: { ...next },
+      assignmentAfter: { ...applied.assignment },
+      freeBefore: {
+        lh: free.lh ? { ...free.lh } : null,
+        rh: free.rh ? { ...free.rh } : null,
+        lf: free.lf ? { ...free.lf } : null,
+        rf: free.rf ? { ...free.rf } : null,
+      },
+      freeAfter: applied.free,
       evaluation,
       staminaAfter: stamina,
       pumpedOut,
     });
 
-    current = next;
+    current = applied.assignment;
+    free = applied.free;
   }
 
   const reachesTop = firstFailureIndex === null && isTopReached(current, holds);
@@ -653,6 +689,7 @@ export function evaluateBetaSequence(
   return {
     traces,
     finalAssignment: current,
+    finalFree: free,
     finalStamina: stamina,
     reachesTop,
     firstFailureIndex,

@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { CLIMBER_PRESETS, computeAnatomy } from './climber';
+import { emptyFreeMap } from './contact';
 import { generateRoute, suggestBeta } from './generator';
 import { blendPosesRigid, dist, doLegsIntersect } from './ik';
-import { evaluateBetaSequence, evaluateMove, getInitialAssignment } from './physics';
+import {
+  evaluateBetaSequence,
+  evaluateHoldMove,
+  evaluateMove,
+  getInitialAssignment,
+} from './physics';
 import { PRESET_ROUTES } from './presets';
 
 describe('Bouldering physics & Beta solver', () => {
@@ -18,7 +24,6 @@ describe('Bouldering physics & Beta solver', () => {
       expect(evalSeq.reachesTop).toBe(true);
       expect(evalSeq.firstFailureIndex).toBeNull();
 
-      // Verify every single step has anatomically legal non-intersecting legs
       for (const tr of evalSeq.traces) {
         expect(doLegsIntersect(tr.evaluation.resultingPose)).toBe(false);
       }
@@ -29,11 +34,10 @@ describe('Bouldering physics & Beta solver', () => {
     const v1 = PRESET_ROUTES[0];
     const standard = CLIMBER_PRESETS[1];
     const init = getInitialAssignment(v1.holds, standard);
-    // Try moving left foot onto hold v1-h2 (x=238, right side) while right foot is on v1-f2 (x=235) or v1-f4 (x=220)
-    const crossEv = evaluateMove(
-      { ...init, lf: 'v1-f1', rf: 'v1-f3' }, // rf at x=180
+    const crossEv = evaluateHoldMove(
+      { ...init, lf: 'v1-f1', rf: 'v1-f3' },
       'lf',
-      'v1-f4', // x=220 (far right of rf!)
+      'v1-f4',
       v1.holds,
       standard
     );
@@ -46,41 +50,67 @@ describe('Bouldering physics & Beta solver', () => {
     const standard = CLIMBER_PRESETS[1];
     const anat = computeAnatomy(standard);
     const init = getInitialAssignment(v1.holds, standard);
-    const ev = evaluateMove(init, 'lh', 'v1-h1', v1.holds, standard);
+    const ev = evaluateHoldMove(init, 'lh', 'v1-h1', v1.holds, standard);
     const mid = blendPosesRigid(
-      evaluateMove(init, 'lf', 'v1-f3', v1.holds, standard).resultingPose,
+      evaluateHoldMove(init, 'lf', 'v1-f3', v1.holds, standard).resultingPose,
       ev.resultingPose,
       0.5,
       anat,
       standard.flexibility
     );
 
-    // 2D projected bone lengths must never exceed anatomical max lengths
     expect(dist(mid.shoulders.lh, mid.elbows.lh)).toBeLessThanOrEqual(anat.upperArmLen + 0.5);
     expect(dist(mid.elbows.lh, mid.limbs.lh)).toBeLessThanOrEqual(anat.forearmLen + 0.5);
     expect(dist(mid.hips.lf, mid.knees.lf)).toBeLessThanOrEqual(anat.thighLen + 0.5);
     expect(dist(mid.knees.lf, mid.limbs.lf)).toBeLessThanOrEqual(anat.shinLen + 0.5);
 
-    // 3D reconstructed thigh length (2D + Z-depth projection) matches exact anatomical thigh length
     const lf2d = dist(mid.hips.lf, mid.knees.lf);
     const lfZ = mid.jointDepth.lf * anat.thighLen;
     expect(Math.abs(Math.hypot(lf2d, lfZ) - anat.thighLen)).toBeLessThan(1.0);
   });
 
+  it('allows foot smear and dangling flag contacts without requiring a hold', () => {
+    const v1 = PRESET_ROUTES[0];
+    const standard = CLIMBER_PRESETS[1];
+    const init = getInitialAssignment(v1.holds, standard);
+
+    // First free the right foot onto a nearby wall smear under the stance
+    const smear = evaluateMove(
+      { ...init, rf: null },
+      emptyFreeMap(),
+      'rf',
+      { kind: 'smear', x: 210, y: 70 },
+      v1.holds,
+      standard
+    );
+    expect(smear.feasible, smear.failReason ?? 'smear should be feasible').toBe(true);
+    expect(smear.warnings.some((w) => w.includes('踩墙') || w.includes('Smear'))).toBe(true);
+
+    // Flag the free left foot for counterbalance while right stays on a hold
+    const flag = evaluateMove(
+      { ...init, lf: null },
+      emptyFreeMap(),
+      'lf',
+      { kind: 'flag', x: 130, y: 55 },
+      v1.holds,
+      standard
+    );
+    expect(flag.feasible, flag.failReason ?? 'flag should be feasible').toBe(true);
+    expect(flag.gripScore).toBe(0);
+  });
+
   it('shows real anthropometric difference between short and long-wingspan climbers on V5 Morpho', () => {
     const morpho = PRESET_ROUTES.find((r) => r.id === 'preset-v5-morpho')!;
-    const shortClimber = CLIMBER_PRESETS[0]; // 156cm, ape 0
-    const tallClimber = CLIMBER_PRESETS[2]; // 188cm, ape +10
+    const shortClimber = CLIMBER_PRESETS[0];
+    const tallClimber = CLIMBER_PRESETS[2];
 
-    // From start stance, try reaching straight for v5-big1 (252, 244) with right hand
     const shortInit = getInitialAssignment(morpho.holds, shortClimber);
     const tallInit = getInitialAssignment(morpho.holds, tallClimber);
 
-    const shortDirect = evaluateMove(shortInit, 'rh', 'v5-big1', morpho.holds, shortClimber);
-    const tallDirect = evaluateMove(tallInit, 'rh', 'v5-big1', morpho.holds, tallClimber);
+    const shortDirect = evaluateHoldMove(shortInit, 'rh', 'v5-big1', morpho.holds, shortClimber);
+    const tallDirect = evaluateHoldMove(tallInit, 'rh', 'v5-big1', morpho.holds, tallClimber);
 
     expect(tallDirect.reachRatio).toBeLessThan(shortDirect.reachRatio);
-    // And short climber can still solve V5 using intermediate holds!
     const shortBeta = suggestBeta(morpho.holds, shortClimber, 24);
     expect(shortBeta.solved).toBe(true);
   });
