@@ -5,6 +5,7 @@ import {
   emptyFreeMap,
   freeOverrides,
   getLimbWorldPos,
+  isSupportingLimb,
   supportingLimbs,
 } from './contact';
 import { getHoldOptimalPullDir, HOLD_SPECS, LIMB_META } from './holds';
@@ -311,21 +312,31 @@ export function evaluateMove(
     warnings.push(`${LIMB_META[limb].nameZh}接近极限伸展`);
   }
 
-  // 2.5 Anatomical legality for feet (holds + smears)
-  const lfPos = getLimbWorldPos('lf', next.assignment, next.free, holdMap);
-  const rfPos = getLimbWorldPos('rf', next.assignment, next.free, holdMap);
+  // 2.5 Anatomical legality for weighted feet (holds + smears); free flags can pass behind in 3D!
+  const lfWeighted = isSupportingLimb(next.assignment, next.free, 'lf');
+  const rfWeighted = isSupportingLimb(next.assignment, next.free, 'rf');
+  const lfPos = lfWeighted ? getLimbWorldPos('lf', next.assignment, next.free, holdMap) : null;
+  const rfPos = rfWeighted ? getLimbWorldPos('rf', next.assignment, next.free, holdMap) : null;
+
   if (lfPos && rfPos) {
-    if (lfPos.x > rfPos.x + 8) {
-      return failEval(nextPose, '双脚反向交叉穿越（左脚不可跨到右脚右侧）', {
+    const reverseCrossX = lfPos.x - rfPos.x;
+    const footHeightGap = Math.abs(lfPos.y - rfPos.y);
+
+    if (reverseCrossX > 12) {
+      return failEval(nextPose, '双脚反向交叉穿越（左脚不可直接踩到右脚外侧），请先移走对侧脚或做换脚', {
         reachRatio: effectiveReach,
         reachExcessCm,
       });
     }
-    if (doLegsIntersect(nextPose)) {
-      return failEval(nextPose, '双腿骨骼发生交叉碰撞，人体无法完成此脚法', {
+
+    // Only hard-block true 3D leg collision when moving a foot and feet aren't widely staggered vertically
+    if (!isHand && footHeightGap < 26 && doLegsIntersect(nextPose)) {
+      return failEval(nextPose, '双腿在同一平面内发生交叉碰撞，可改用悬空后挂（Flag）或先调整对侧脚', {
         reachRatio: effectiveReach,
         reachExcessCm,
       });
+    } else if (doLegsIntersect(nextPose)) {
+      warnings.push('双腿姿态较为紧凑，注意转髋让开膝盖空间');
     }
   }
 
@@ -333,7 +344,7 @@ export function evaluateMove(
     const crossOffset =
       limb === 'lf' ? targetPos.x - nextPose.pelvis.x : nextPose.pelvis.x - targetPos.x;
     const isHighFoot = targetPos.y > nextPose.pelvis.y - 34;
-    if (crossOffset > (isHighFoot ? 22 : 36)) {
+    if (crossOffset > (isHighFoot ? 28 : 42)) {
       return failEval(nextPose, `${LIMB_META[limb].nameZh}跨过身体中线过深，髋关节无法扭转到位`, {
         reachRatio: effectiveReach,
         reachExcessCm,

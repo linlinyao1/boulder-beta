@@ -97,6 +97,17 @@ describe('Bouldering physics & Beta solver', () => {
     );
     expect(flag.feasible, flag.failReason ?? 'flag should be feasible').toBe(true);
     expect(flag.gripScore).toBe(0);
+
+    // Back-flagging right foot behind left standing leg should be allowed (3D depth clearance!)
+    const backFlag = evaluateMove(
+      { ...init, lf: 'v1-f1', rf: null },
+      emptyFreeMap(),
+      'rf',
+      { kind: 'flag', x: 135, y: 40 },
+      v1.holds,
+      standard
+    );
+    expect(backFlag.feasible, backFlag.failReason ?? 'back-flag should be allowed').toBe(true);
   });
 
   it('shows real anthropometric difference between short and long-wingspan climbers on V5 Morpho', () => {

@@ -47,36 +47,84 @@ export function easeInOutCubic(t: number): number {
 }
 
 /**
- * Exact 2D segment intersection test (excluding tiny endpoint tolerance so shared hips don't false-trigger).
+ * Exact 2D segment intersection test returning intersection parameters (t, u) or null.
  */
-export function segmentsIntersect(a1: Vec2, a2: Vec2, b1: Vec2, b2: Vec2, eps = 0.04): boolean {
+export function segmentIntersectionParams(
+  a1: Vec2,
+  a2: Vec2,
+  b1: Vec2,
+  b2: Vec2,
+  eps = 0.08
+): { t: number; u: number } | null {
   const dxa = a2.x - a1.x;
   const dya = a2.y - a1.y;
   const dxb = b2.x - b1.x;
   const dyb = b2.y - b1.y;
   const denom = dxa * dyb - dya * dxb;
-  if (Math.abs(denom) < 1e-6) return false;
+  if (Math.abs(denom) < 1e-6) return null;
 
   const t = ((b1.x - a1.x) * dyb - (b1.y - a1.y) * dxb) / denom;
   const u = ((b1.x - a1.x) * dya - (b1.y - a1.y) * dxa) / denom;
-  return t > eps && t < 1 - eps && u > eps && u < 1 - eps;
+  if (t > eps && t < 1 - eps && u > eps && u < 1 - eps) {
+    return { t, u };
+  }
+  return null;
+}
+
+export function segmentsIntersect(a1: Vec2, a2: Vec2, b1: Vec2, b2: Vec2, eps = 0.08): boolean {
+  return segmentIntersectionParams(a1, a2, b1, b2, eps) !== null;
 }
 
 /**
- * Checks whether the left leg skeleton and right leg skeleton physically pass through each other.
+ * Checks whether the left leg skeleton and right leg skeleton genuinely collide in 2.5D space.
+ * Accounts for:
+ * - Hip/ankle proximity tolerance (foot matching & narrow stances don't false-trigger)
+ * - Z-depth separation (a high bent knee sticking out from the wall clears a straighter lower leg)
  */
 export function doLegsIntersect(pose: SolvedPose): boolean {
-  const lThigh: [Vec2, Vec2] = [pose.hips.lf, pose.knees.lf];
-  const lShin: [Vec2, Vec2] = [pose.knees.lf, pose.limbs.lf];
-  const rThigh: [Vec2, Vec2] = [pose.hips.rf, pose.knees.rf];
-  const rShin: [Vec2, Vec2] = [pose.knees.rf, pose.limbs.rf];
+  // Foot match / tight ankle cluster: ankles naturally meet on the same/adjacent holds
+  if (dist(pose.limbs.lf, pose.limbs.rf) < 16) {
+    return false;
+  }
 
-  return (
-    segmentsIntersect(lThigh[0], lThigh[1], rThigh[0], rThigh[1]) ||
-    segmentsIntersect(lThigh[0], lThigh[1], rShin[0], rShin[1]) ||
-    segmentsIntersect(lShin[0], lShin[1], rThigh[0], rThigh[1]) ||
-    segmentsIntersect(lShin[0], lShin[1], rShin[0], rShin[1])
-  );
+  // Strongly staggered high/low feet (high-step + straight standing leg) clear each other in 3D
+  // as long as the feet aren't reversed across each other
+  const footHeightGap = Math.abs(pose.limbs.lf.y - pose.limbs.rf.y);
+  if (footHeightGap >= 24 && pose.limbs.lf.x <= pose.limbs.rf.x + 12) {
+    return false;
+  }
+
+  // Approximate normalized Z coordinates (0 = on wall, positive = away from wall toward camera)
+  const hipZ = 0.14;
+  const footZ = 0.0;
+  const lKneeZ = pose.jointDepth.lf;
+  const rKneeZ = pose.jointDepth.rf;
+
+  type Seg3D = { a: Vec2; b: Vec2; za: number; zb: number };
+  const leftSegs: Seg3D[] = [
+    { a: pose.hips.lf, b: pose.knees.lf, za: hipZ, zb: lKneeZ },
+    { a: pose.knees.lf, b: pose.limbs.lf, za: lKneeZ, zb: footZ },
+  ];
+  const rightSegs: Seg3D[] = [
+    { a: pose.hips.rf, b: pose.knees.rf, za: hipZ, zb: rKneeZ },
+    { a: pose.knees.rf, b: pose.limbs.rf, za: rKneeZ, zb: footZ },
+  ];
+
+  const minZClearance = 0.16;
+
+  for (const ls of leftSegs) {
+    for (const rs of rightSegs) {
+      const hit = segmentIntersectionParams(ls.a, ls.b, rs.a, rs.b, 0.14);
+      if (!hit) continue;
+      const zL = lerp(ls.za, ls.zb, hit.t);
+      const zR = lerp(rs.za, rs.zb, hit.u);
+      // Only a true physical collision when both legs occupy nearly the same depth plane
+      if (Math.abs(zL - zR) < minZClearance) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function getTorsoFrames(

@@ -256,7 +256,7 @@ export function renderScene(
     if (state.fallingState?.active) {
       drawFallingClimber(ctx, tr, state.fallingState, state.profile);
     } else {
-      drawClimber(ctx, tr, state.pose, state.profile, state.assignment, state.strainLevel, state.lookTarget, state.timeSec);
+      drawClimber(ctx, tr, state.pose, state.profile, state.assignment, state.freeLimbs, state.strainLevel, state.lookTarget, state.timeSec);
     }
   } else {
     // In setter mode, draw a subtle ghost climber silhouette at the left/bottom scale reference
@@ -825,6 +825,7 @@ function drawClimber(
   pose: SolvedPose,
   profile: ClimberProfile,
   assignment: LimbAssignment,
+  freeLimbs: FreeLimbMap | undefined,
   strainLevel: number,
   lookTarget: Vec2 | null,
   timeSec: number
@@ -948,15 +949,20 @@ function drawClimber(
     drawHandMarker(ctx, hand, 4.1 * s, limbColor, anchored);
   };
 
-  // Depth layering based on hipTurn (far side behind torso, near side in front!)
+  // Depth layering: back-flagging leg draws behind the standing leg; otherwise use hipTurn
   const rightIsNear = pose.hipTurn >= 0;
+  const lfIsFlag = freeLimbs?.lf?.mode === 'flag';
+  const rfIsFlag = freeLimbs?.rf?.mode === 'flag';
+  const farLeg: 'left' | 'right' =
+    lfIsFlag && !rfIsFlag ? 'left' : rfIsFlag && !lfIsFlag ? 'right' : rightIsNear ? 'left' : 'right';
+  const nearLeg: 'left' | 'right' = farLeg === 'left' ? 'right' : 'left';
 
   // 1. Far leg & far arm behind torso
-  drawLeg(rightIsNear ? 'left' : 'right', true);
+  drawLeg(farLeg, true);
   drawArm(rightIsNear ? 'left' : 'right', true);
 
   // 2. Near leg
-  drawLeg(rightIsNear ? 'right' : 'left', false);
+  drawLeg(nearLeg, false);
 
   // 3. Organic athletic torso with waist taper & hip shorts
   ctx.save();
@@ -1104,6 +1110,7 @@ function drawFallingClimber(
     falling.pose,
     profile,
     { lh: null, rh: null, lf: null, rf: null },
+    undefined,
     0,
     null,
     0
