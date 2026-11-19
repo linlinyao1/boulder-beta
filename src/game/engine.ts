@@ -2,11 +2,12 @@ import { CLIMBER_PRESETS, computeAnatomy } from './climber';
 import {
   applyLimbTarget,
   detachLimb,
+  dynoTarget,
   emptyFreeMap,
+  flagTarget,
   freeOverrides,
   holdTarget,
   smearTarget,
-  flagTarget,
   targetLabel,
 } from './contact';
 import { generateRoute, nextUid, suggestBeta } from './generator';
@@ -330,7 +331,7 @@ export class BoulderEngine {
     const targetId = this.selectedHoldId;
     this.holds = renumberHolds(this.holds.filter((h) => h.id !== targetId));
     this.betaSteps = this.betaSteps.filter(
-      (s) => !(s.target.kind === 'hold' && s.target.holdId === targetId)
+      (s) => !((s.target.kind === 'hold' || s.target.kind === 'dyno') && s.target.holdId === targetId)
     );
     this.selectedHoldId = null;
     this.inspectedStepIndex = Math.min(this.inspectedStepIndex, this.betaSteps.length - 1);
@@ -369,8 +370,12 @@ export class BoulderEngine {
 
   public setPlanContactMode(mode: PlanContactMode): void {
     this.planContactMode = mode;
+    if (mode === 'dyno' && !LIMB_META[this.activeLimb].isHand) {
+      this.activeLimb = 'rh';
+    }
     this.wallHoverEval = null;
     this.wallHoverPos = null;
+    this.recomputePreviewEvaluations();
     this.emit();
   }
 
@@ -379,15 +384,26 @@ export class BoulderEngine {
     if (target.kind === 'hold' && contacts.assignment[this.activeLimb] === target.holdId) {
       return;
     }
+    if (
+      target.kind === 'dyno' &&
+      target.bothHands &&
+      contacts.assignment.lh === target.holdId &&
+      contacts.assignment.rh === target.holdId
+    ) {
+      return;
+    }
 
     const prefix =
       this.inspectedStepIndex < this.betaSteps.length - 1
         ? this.betaSteps.slice(0, this.inspectedStepIndex + 1)
         : this.betaSteps;
 
+    const stepLimb: LimbId =
+      target.kind === 'dyno' && target.bothHands ? 'rh' : this.activeLimb;
+
     const newStep: BetaStep = {
       id: nextUid('step'),
-      limb: this.activeLimb,
+      limb: stepLimb,
       target,
     };
     this.betaSteps = [...prefix, newStep];
@@ -396,10 +412,10 @@ export class BoulderEngine {
     this.syncPlanPose(false);
 
     const puff =
-      target.kind === 'hold'
+      target.kind === 'hold' || target.kind === 'dyno'
         ? this.holds.find((h) => h.id === target.holdId)
         : { x: target.x, y: target.y };
-    if (puff) this.spawnChalkPuff({ x: puff.x, y: puff.y }, 7);
+    if (puff) this.spawnChalkPuff({ x: puff.x, y: puff.y }, target.kind === 'dyno' ? 12 : 7);
     this.emit();
   }
 
@@ -562,9 +578,19 @@ export class BoulderEngine {
     if (this.mode !== 'plan') return;
     const { assignment, free } = this.getInspectedContacts();
     for (const h of this.holds) {
-      if (assignment[this.activeLimb] === h.id) continue;
-      const ev = evaluateMove(assignment, free, this.activeLimb, holdTarget(h.id), this.holds, this.profile);
-      this.previewEvaluations.set(h.id, ev);
+      if (this.planContactMode === 'doubleDyno') {
+        if (assignment.lh === h.id && assignment.rh === h.id) continue;
+        const ev = evaluateMove(assignment, free, 'rh', dynoTarget(h.id, true), this.holds, this.profile);
+        this.previewEvaluations.set(h.id, ev);
+      } else if (this.planContactMode === 'dyno') {
+        if (assignment[this.activeLimb] === h.id) continue;
+        const ev = evaluateMove(assignment, free, this.activeLimb, dynoTarget(h.id, false), this.holds, this.profile);
+        this.previewEvaluations.set(h.id, ev);
+      } else {
+        if (assignment[this.activeLimb] === h.id) continue;
+        const ev = evaluateMove(assignment, free, this.activeLimb, holdTarget(h.id), this.holds, this.profile);
+        this.previewEvaluations.set(h.id, ev);
+      }
     }
   }
 
@@ -587,7 +613,7 @@ export class BoulderEngine {
 
   private resolveStepTargetPos(step: BetaStep): Vec2 | null {
     const t = step.target;
-    if (t.kind === 'hold') {
+    if (t.kind === 'hold' || t.kind === 'dyno') {
       const hold = this.holds.find((x) => x.id === t.holdId);
       return hold ? { x: hold.x, y: hold.y } : null;
     }
@@ -609,7 +635,9 @@ export class BoulderEngine {
     const anatomy = computeAnatomy(this.profile);
     const targetPos = this.resolveStepTargetPos(step);
     const targetHold =
-      step.target.kind === 'hold' ? holdMap.get(step.target.holdId) : undefined;
+      step.target.kind === 'hold' || step.target.kind === 'dyno'
+        ? holdMap.get(step.target.holdId)
+        : undefined;
     const ev = evaluateMove(
       currentAssignment,
       currentFree,
@@ -643,9 +671,12 @@ export class BoulderEngine {
       targetHold
         ? `#${targetHold.label} ${HOLD_SPECS[targetHold.type].shortZh}`
         : targetLabel(step.target);
-    this.climbStatusText = ev.isDyno
-      ? `第 ${stepIdx + 1} 步：${limbName}蓄力动态飞跃 -> ${destLabel}`
-      : `第 ${stepIdx + 1} 步：重心调整，${limbName}移动 -> ${destLabel}`;
+    const isDoubleDyno = step.target.kind === 'dyno' && step.target.bothHands;
+    this.climbStatusText = isDoubleDyno
+      ? `第 ${stepIdx + 1} 步：深蹲蓄力，双手齐飞 (Double Dyno) -> ${destLabel}！`
+      : ev.isDyno
+        ? `第 ${stepIdx + 1} 步：蹬脚发力，${limbName}动态飞跃 -> ${destLabel}！`
+        : `第 ${stepIdx + 1} 步：重心调整，${limbName}移动 -> ${destLabel}`;
 
     const nextCruxStrain = ev.staminaCost > cruxStrain ? ev.staminaCost : cruxStrain;
     const nextCruxIdx = ev.staminaCost > cruxStrain ? stepIdx : cruxStepIndex;
@@ -653,7 +684,7 @@ export class BoulderEngine {
     this.anim = {
       phase: 'shift',
       phaseTime: 0,
-      phaseDuration: ev.isDyno ? 0.36 : 0.28,
+      phaseDuration: isDoubleDyno ? 0.44 : ev.isDyno ? 0.38 : 0.28,
       stepIdx,
       startPose,
       supportPose,
@@ -772,7 +803,12 @@ export class BoulderEngine {
     const anatomy = computeAnatomy(this.profile);
     const targetPos = step ? this.resolveStepTargetPos(step) : null;
     const targetHold =
-      step && step.target.kind === 'hold' ? holdMap.get(step.target.holdId) : undefined;
+      step && (step.target.kind === 'hold' || step.target.kind === 'dyno')
+        ? holdMap.get(step.target.holdId)
+        : undefined;
+    const isDoubleDyno = step?.target.kind === 'dyno' && step.target.bothHands;
+    const isExplicitDyno = step?.target.kind === 'dyno';
+    const cutsFeet = Boolean(a.currentEval?.cutsFeet);
     const anchoredAll: Record<LimbId, boolean> = {
       lh: a.currentAssignment.lh !== null || a.currentFree.lh !== null,
       rh: a.currentAssignment.rh !== null || a.currentFree.rh !== null,
@@ -781,18 +817,18 @@ export class BoulderEngine {
     };
 
     if (a.phase === 'shift') {
-      // Phase 1: Weight transfer & anticipation — all 4 limbs remain rigidly pinned to holds!
+      // Phase 1: Weight transfer / deep squat coil before explosive Dyno launch
       const e = easeInOutCubic(t);
-      const pelvis = lerpVec(a.startPose.pelvis, a.supportPose.pelvis, e * 0.62);
-      if (a.currentEval?.isDyno) {
-        // Coil legs downward before explosive Dyno launch
-        pelvis.y -= Math.sin(t * Math.PI) * 14;
+      const pelvis = lerpVec(a.startPose.pelvis, a.supportPose.pelvis, e * (isExplicitDyno ? 0.38 : 0.62));
+      if (isExplicitDyno || a.currentEval?.isDyno) {
+        // Deep athletic coil downward before exploding upward!
+        const coilDepth = isDoubleDyno ? 22 : isExplicitDyno ? 18 : 14;
+        pelvis.y = Math.max(22, pelvis.y - Math.sin(t * Math.PI * 0.85) * coilDepth);
       } else {
-        // Subtle weight settle onto supporting foot
         pelvis.y -= Math.sin(t * Math.PI) * 2.5;
       }
-      const torsoAngle = lerp(a.startPose.torsoAngle, a.supportPose.torsoAngle, e * 0.65);
-      const hipTurn = lerp(a.startPose.hipTurn, a.supportPose.hipTurn, e * 0.72);
+      const torsoAngle = lerp(a.startPose.torsoAngle, a.supportPose.torsoAngle, e * 0.55);
+      const hipTurn = lerp(a.startPose.hipTurn, a.supportPose.hipTurn, e * 0.65);
 
       this.displayPose = buildRigidPoseFromTargets(
         pelvis,
@@ -805,69 +841,126 @@ export class BoulderEngine {
       );
 
       if (t >= 1) {
-        this.spawnChalkPuff(a.startPose.limbs[step.limb], 7);
+        if (isDoubleDyno) {
+          this.spawnChalkPuff(a.startPose.limbs.lh, 9);
+          this.spawnChalkPuff(a.startPose.limbs.rh, 9);
+        } else {
+          this.spawnChalkPuff(a.startPose.limbs[step.limb], 7);
+        }
+        if (cutsFeet) {
+          // Explosive foot push-off chalk burst!
+          if (a.currentAssignment.lf || a.currentFree.lf) this.spawnChalkPuff(a.startPose.limbs.lf, 10, '#E2E8F0');
+          if (a.currentAssignment.rf || a.currentFree.rf) this.spawnChalkPuff(a.startPose.limbs.rf, 10, '#E2E8F0');
+        }
         a.phase = 'reach';
         a.phaseTime = 0;
         const moveDist = targetHold ? dist(a.startPose.limbs[step.limb], targetHold) : 50;
-        a.phaseDuration = a.currentEval?.isDyno
-          ? 0.34
-          : clamp(0.32 + moveDist / 340, 0.36, 0.56);
+        a.phaseDuration = isDoubleDyno
+          ? 0.42
+          : isExplicitDyno
+            ? 0.38
+            : a.currentEval?.isDyno
+              ? 0.34
+              : clamp(0.32 + moveDist / 340, 0.36, 0.56);
       }
     } else if (a.phase === 'reach') {
-      // Phase 2: Curved anatomical limb swing + coordinated hip/torso drive with exact rigid IK
+      // Phase 2: Curved limb swing OR full airborne parabolic Dyno flight!
       const isShortFail = a.willFail && (a.currentEval?.reachExcessCm ?? 0) > 0;
       const isHand = LIMB_META[step.limb].isHand;
       const isLeft = LIMB_META[step.limb].side === 'left';
       const reachFactor = isShortFail ? 0.78 : 1.0;
 
       const moveEase = a.currentEval?.isDyno ? easeOutCubic(t) : easeInOutCubic(t);
-      const bodyEase = easeInOutCubic(t);
+      const bodyEase = isExplicitDyno ? easeOutCubic(t) : easeInOutCubic(t);
 
-      // Start from shifted pose smoothly into target landing pose
-      const shiftStartPelvis = lerpVec(a.startPose.pelvis, a.supportPose.pelvis, 0.62);
-      const shiftStartTorso = lerp(a.startPose.torsoAngle, a.supportPose.torsoAngle, 0.65);
-      const shiftStartTurn = lerp(a.startPose.hipTurn, a.supportPose.hipTurn, 0.72);
+      const coilDrop = isDoubleDyno ? 22 : isExplicitDyno ? 18 : 0;
+      const shiftStartPelvis = lerpVec(a.startPose.pelvis, a.supportPose.pelvis, isExplicitDyno ? 0.38 : 0.62);
+      shiftStartPelvis.y = Math.max(22, shiftStartPelvis.y - coilDrop * Math.sin(Math.PI * 0.85));
+      const shiftStartTorso = lerp(a.startPose.torsoAngle, a.supportPose.torsoAngle, 0.55);
+      const shiftStartTurn = lerp(a.startPose.hipTurn, a.supportPose.hipTurn, 0.65);
 
       const pelvis = lerpVec(shiftStartPelvis, a.targetPose.pelvis, bodyEase * reachFactor);
-      if (a.currentEval?.isDyno) {
-        // Dynamic upward momentum arc during dyno flight
+      if (isDoubleDyno) {
+        // Big parabolic jump apex!
+        pelvis.y += Math.sin(t * Math.PI) * 28;
+      } else if (isExplicitDyno) {
+        pelvis.y += Math.sin(t * Math.PI) * 21;
+      } else if (a.currentEval?.isDyno) {
         pelvis.y += Math.sin(t * Math.PI) * 14;
       }
+
       const torsoAngle = lerp(shiftStartTorso, a.targetPose.torsoAngle, bodyEase * reachFactor);
       const hipTurn = lerp(shiftStartTurn, a.targetPose.hipTurn, bodyEase * reachFactor);
 
-      // Quadratic Bezier arc for the moving limb (clears the wall & never clips through the body)
-      const fromPt = a.startPose.limbs[step.limb];
       const toPt = targetPos ?? a.targetPose.limbs[step.limb];
-      const destPt = lerpVec(fromPt, toPt, reachFactor);
 
-      const sideSign = isLeft ? -1 : 1;
-      const isSteppingUp = destPt.y > fromPt.y + 8;
-      const ctrlPt: Vec2 = {
-        x: (fromPt.x + destPt.x) / 2 + sideSign * (isHand ? 12 : 9),
-        y:
-          (fromPt.y + destPt.y) / 2 +
-          (a.currentEval?.isDyno ? 20 : isHand ? 9 : isSteppingUp ? 7 : 3),
+      const limbPinned = (l: LimbId) => {
+        if (cutsFeet && (l === 'lf' || l === 'rf')) return false;
+        if (isDoubleDyno && (l === 'lh' || l === 'rh')) return false;
+        return a.currentAssignment[l] !== null || a.currentFree[l] !== null;
       };
 
-      const inv = 1 - moveEase;
-      const movingPos: Vec2 = {
-        x: inv * inv * fromPt.x + 2 * inv * moveEase * ctrlPt.x + moveEase * moveEase * destPt.x,
-        y: inv * inv * fromPt.y + 2 * inv * moveEase * ctrlPt.y + moveEase * moveEase * destPt.y,
-      };
-
-      // Supporting limbs stay locked to holds/smears; flags & free limbs follow smoothly
-      const limbPinned = (l: LimbId) =>
-        a.currentAssignment[l] !== null || a.currentFree[l] !== null;
       const limbTargets: Record<LimbId, Vec2> = {
         lh: limbPinned('lh') ? a.startPose.limbs.lh : lerpVec(a.startPose.limbs.lh, a.targetPose.limbs.lh, bodyEase),
         rh: limbPinned('rh') ? a.startPose.limbs.rh : lerpVec(a.startPose.limbs.rh, a.targetPose.limbs.rh, bodyEase),
         lf: limbPinned('lf') ? a.startPose.limbs.lf : lerpVec(a.startPose.limbs.lf, a.targetPose.limbs.lf, bodyEase),
         rf: limbPinned('rf') ? a.startPose.limbs.rf : lerpVec(a.startPose.limbs.rf, a.targetPose.limbs.rf, bodyEase),
       };
-      limbTargets[step.limb] = movingPos;
 
-      const activeFlags: Record<LimbId, boolean> = { ...anchoredAll, [step.limb]: false };
+      // Airborne trailing feet during a cut-loose Dyno!
+      if (cutsFeet) {
+        const flightDragY = Math.sin(t * Math.PI) * 16;
+        const flightDragX = -(a.targetPose.pelvis.x - a.startPose.pelvis.x) * Math.sin(t * Math.PI) * 0.22;
+        limbTargets.lf = {
+          x: lerp(a.startPose.limbs.lf.x, a.targetPose.limbs.lf.x, bodyEase) + flightDragX - 4 * Math.sin(t * Math.PI),
+          y: Math.max(8, lerp(a.startPose.limbs.lf.y, a.targetPose.limbs.lf.y, bodyEase) - flightDragY),
+        };
+        limbTargets.rf = {
+          x: lerp(a.startPose.limbs.rf.x, a.targetPose.limbs.rf.x, bodyEase) + flightDragX + 4 * Math.sin(t * Math.PI),
+          y: Math.max(8, lerp(a.startPose.limbs.rf.y, a.targetPose.limbs.rf.y, bodyEase) - flightDragY),
+        };
+      }
+
+      // Compute sweeping arc for reaching hand(s) or foot
+      let movingPos: Vec2 = toPt;
+      if (isDoubleDyno) {
+        const destL = lerpVec(a.startPose.limbs.lh, { x: toPt.x - 5, y: toPt.y }, reachFactor);
+        const destR = lerpVec(a.startPose.limbs.rh, { x: toPt.x + 5, y: toPt.y }, reachFactor);
+        const arcLift = Math.sin(t * Math.PI) * 24;
+        limbTargets.lh = {
+          x: lerp(a.startPose.limbs.lh.x, destL.x, moveEase) - Math.sin(t * Math.PI) * 12,
+          y: lerp(a.startPose.limbs.lh.y, destL.y, moveEase) + arcLift,
+        };
+        limbTargets.rh = {
+          x: lerp(a.startPose.limbs.rh.x, destR.x, moveEase) + Math.sin(t * Math.PI) * 12,
+          y: lerp(a.startPose.limbs.rh.y, destR.y, moveEase) + arcLift,
+        };
+        movingPos = toPt;
+      } else {
+        const fromPt = a.startPose.limbs[step.limb];
+        const destPt = lerpVec(fromPt, toPt, reachFactor);
+        const sideSign = isLeft ? -1 : 1;
+        const isSteppingUp = destPt.y > fromPt.y + 8;
+        const ctrlPt: Vec2 = {
+          x: (fromPt.x + destPt.x) / 2 + sideSign * (isHand ? 12 : 9),
+          y:
+            (fromPt.y + destPt.y) / 2 +
+            (a.currentEval?.isDyno ? 22 : isHand ? 9 : isSteppingUp ? 7 : 3),
+        };
+        const inv = 1 - moveEase;
+        movingPos = {
+          x: inv * inv * fromPt.x + 2 * inv * moveEase * ctrlPt.x + moveEase * moveEase * destPt.x,
+          y: inv * inv * fromPt.y + 2 * inv * moveEase * ctrlPt.y + moveEase * moveEase * destPt.y,
+        };
+        limbTargets[step.limb] = movingPos;
+      }
+
+      const activeFlags: Record<LimbId, boolean> = {
+        lh: limbPinned('lh') && step.limb !== 'lh',
+        rh: limbPinned('rh') && step.limb !== 'rh',
+        lf: limbPinned('lf') && step.limb !== 'lf',
+        rf: limbPinned('rf') && step.limb !== 'rf',
+      };
 
       this.displayPose = buildRigidPoseFromTargets(
         pelvis,
@@ -884,50 +977,81 @@ export class BoulderEngine {
 
       if (t >= 1) {
         if (a.willFail) {
-          this.spawnChalkPuff(movingPos, 14, '#FFFFFF');
+          this.spawnChalkPuff(movingPos, 16, '#FFFFFF');
           a.phase = 'fall';
           a.phaseTime = 0;
           a.phaseDuration = 1.6;
           a.fallPose = this.displayPose;
           a.fallOffsetX = 0;
           a.fallOffsetY = 0;
+          const jumpDirX = a.targetPose.pelvis.x - a.startPose.pelvis.x;
           const barnPush =
-            (a.currentEval?.barnDoorRisk ?? 0) > 0.5
-              ? this.displayPose.com.x > 200
-                ? 48
-                : -48
-              : (Math.random() - 0.5) * 28;
+            isExplicitDyno
+              ? clamp(jumpDirX * 0.65, -70, 70)
+              : (a.currentEval?.barnDoorRisk ?? 0) > 0.5
+                ? this.displayPose.com.x > 200
+                  ? 48
+                  : -48
+                : (Math.random() - 0.5) * 28;
           a.fallVx = barnPush;
-          a.fallVy = a.currentEval?.isDyno ? 35 : -10;
+          a.fallVy = a.currentEval?.isDyno ? 55 : -10;
           a.fallRot = 0;
-          a.fallOmega = barnPush >= 0 ? 1.8 : -1.8;
+          a.fallOmega = barnPush >= 0 ? 2.1 : -2.1;
           this.climbStatusText = `脱落！${a.failReason}`;
           this.emit();
         } else {
-          if (targetPos) this.spawnChalkPuff(targetPos, 11);
-          const applied = applyLimbTarget(a.currentAssignment, a.currentFree, step.limb, step.target);
+          if (targetPos) this.spawnChalkPuff(targetPos, isExplicitDyno ? 18 : 11);
+          const applied = applyLimbTarget(
+            a.currentAssignment,
+            a.currentFree,
+            step.limb,
+            step.target,
+            cutsFeet
+          );
           a.currentAssignment = applied.assignment;
           a.currentFree = applied.free;
           this.climbStamina = a.staminaAfterStep;
           a.phase = 'settle';
           a.phaseTime = 0;
-          a.phaseDuration = a.currentEval?.isDyno ? 0.34 : 0.24;
+          a.phaseDuration = cutsFeet ? 0.52 : a.currentEval?.isDyno ? 0.34 : 0.24;
           this.emit();
         }
       }
     } else if (a.phase === 'settle') {
-      // Phase 3: Elastic catch-and-settle (feel gravity weight catching onto the new hold!)
-      const dipAmp = a.currentEval?.isDyno ? 8.5 : 3.2;
+      // Phase 3: Elastic catch + realistic cut-loose pendulum leg swing after Dyno!
+      const dipAmp = cutsFeet ? 12 : a.currentEval?.isDyno ? 8.5 : 3.2;
       const dampedBounce = Math.sin(t * Math.PI) * Math.exp(-t * 1.4) * dipAmp;
+      const jumpMomentumSign = a.targetPose.pelvis.x >= a.startPose.pelvis.x ? 1 : -1;
+      const swingPelvisX = cutsFeet
+        ? Math.sin(t * Math.PI * 2.2) * Math.exp(-t * 2.4) * 14 * jumpMomentumSign
+        : 0;
+
       const settlePelvis: Vec2 = {
-        x: a.targetPose.pelvis.x,
+        x: clamp(a.targetPose.pelvis.x + swingPelvisX, 24, WALL_WIDTH_CM - 24),
         y: Math.max(20, a.targetPose.pelvis.y - dampedBounce),
       };
+
+      const settleLimbs = { ...a.targetPose.limbs };
+      if (cutsFeet) {
+        // Secondary-motion phase-lagged pendulum swing on dangling legs!
+        const legSwingX =
+          Math.sin(Math.max(0, t - 0.1) * Math.PI * 2.2) * Math.exp(-t * 1.9) * 26 * jumpMomentumSign;
+        const legLiftY = Math.abs(legSwingX) * 0.28;
+        settleLimbs.lf = {
+          x: clamp(a.targetPose.limbs.lf.x + legSwingX, 14, WALL_WIDTH_CM - 14),
+          y: Math.max(8, a.targetPose.limbs.lf.y + legLiftY),
+        };
+        settleLimbs.rf = {
+          x: clamp(a.targetPose.limbs.rf.x + legSwingX, 14, WALL_WIDTH_CM - 14),
+          y: Math.max(8, a.targetPose.limbs.rf.y + legLiftY),
+        };
+      }
+
       this.displayPose = buildRigidPoseFromTargets(
         settlePelvis,
-        a.targetPose.torsoAngle,
+        a.targetPose.torsoAngle + (cutsFeet ? swingPelvisX * 0.012 : 0),
         a.targetPose.hipTurn,
-        { ...a.targetPose.limbs },
+        settleLimbs,
         {
           lh: a.currentAssignment.lh !== null || a.currentFree.lh !== null,
           rh: a.currentAssignment.rh !== null || a.currentFree.rh !== null,
@@ -1171,8 +1295,13 @@ export class BoulderEngine {
         }
       } else if (this.mode === 'plan') {
         if (hit) {
-          // Clicking a hold always places a hold contact (regardless of smear/flag mode)
-          this.addBetaTarget(holdTarget(hit.id));
+          if (this.planContactMode === 'dyno') {
+            this.addBetaTarget(dynoTarget(hit.id, false));
+          } else if (this.planContactMode === 'doubleDyno') {
+            this.addBetaTarget(dynoTarget(hit.id, true));
+          } else {
+            this.addBetaTarget(holdTarget(hit.id));
+          }
         } else if (
           (this.planContactMode === 'smear' || this.planContactMode === 'flag') &&
           wp.x >= 12 &&

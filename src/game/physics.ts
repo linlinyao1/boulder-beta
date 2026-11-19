@@ -181,7 +181,263 @@ function supportPointPos(
 }
 
 /**
- * Evaluates a planned climbing move onto a hold, wall smear, or dangling flag.
+ * Evaluates an explicit Single-Hand or Double-Hand Dyno (dynamic launch + possible cut-loose).
+ */
+function evaluateDynoMove(
+  prevAssignment: LimbAssignment,
+  prevFree: FreeLimbMap,
+  limb: LimbId,
+  target: Extract<LimbTarget, { kind: 'dyno' }>,
+  holds: Hold[],
+  profile: ClimberProfile
+): MoveEvaluation {
+  const holdMap = buildHoldMap(holds);
+  const anatomy = computeAnatomy(profile);
+  const targetHold = holdMap.get(target.holdId) ?? null;
+  const warnings: string[] = [];
+
+  const startPose = solvePose(
+    prevAssignment,
+    holdMap,
+    anatomy,
+    profile.flexibility,
+    undefined,
+    freeOverrides(prevFree)
+  );
+
+  if (!targetHold) {
+    return failEval(startPose, '飞跃目标岩点不存在', { isDyno: true, isDoubleDyno: target.bothHands });
+  }
+
+  if (!target.bothHands && !LIMB_META[limb].isHand) {
+    return failEval(startPose, '单手飞跃需先选择左手或右手，或直接切换「双飞」', {
+      isDyno: true,
+    });
+  }
+
+  if (targetHold.type === 'foothold') {
+    return failEval(startPose, `#${targetHold.label} 是小脚点，动态飞跃无法抓停`, {
+      isDyno: true,
+      isDoubleDyno: target.bothHands,
+      staminaCost: 18,
+    });
+  }
+
+  // Require push-off feet below pelvis
+  const pushFeet = supportingLimbs(prevAssignment, prevFree, ['lf', 'rf']).filter((fl) => {
+    const p = supportPointPos(fl, prevAssignment, prevFree, holdMap);
+    return p && p.y < startPose.pelvis.y + 26;
+  });
+
+  if (pushFeet.length === 0) {
+    return failEval(startPose, '双脚处于悬空状态，缺少蹬伸支点，无法起跳飞跃（请先踩稳至少一只脚）', {
+      isDyno: true,
+      isDoubleDyno: target.bothHands,
+      staminaCost: 14,
+    });
+  }
+
+  // Impulse quality from feet (holds push much stronger than wall smears)
+  const holdFeetCount = pushFeet.filter((fl) => prevAssignment[fl] !== null).length;
+  const smearFeetCount = pushFeet.length - holdFeetCount;
+  const footImpulse =
+    holdFeetCount >= 2
+      ? 1.0
+      : holdFeetCount === 1 && smearFeetCount >= 1
+        ? 0.9
+        : holdFeetCount === 1
+          ? 0.8
+          : smearFeetCount >= 2
+            ? 0.72
+            : 0.62;
+
+  const footPts = pushFeet
+    .map((fl) => supportPointPos(fl, prevAssignment, prevFree, holdMap)!)
+    .filter(Boolean);
+  const avgFootX = footPts.reduce((s, p) => s + p.x, 0) / footPts.length;
+  const avgFootY = footPts.reduce((s, p) => s + p.y, 0) / footPts.length;
+
+  // Explosive launch power: favors light + flexible + strong climbers, while taller climbers have higher standing base
+  const explosiveness = clamp(
+    (profile.gripStrength * 0.48 + profile.flexibility * 0.52) /
+      92 /
+      Math.pow(anatomy.weightFactor, 0.28),
+    0.82,
+    1.24
+  );
+
+  // Extended push-off chest position at full leg extension right before leaving the wall
+  const extChestY = Math.max(
+    startPose.chest.y + 8,
+    avgFootY + anatomy.maxLegReach * 0.92 + anatomy.torsoLen
+  );
+  const launchOrigin: Vec2 = {
+    x: startPose.chest.x * 0.55 + avgFootX * 0.45,
+    y: extChestY,
+  };
+
+  const dx = targetHold.x - launchOrigin.x;
+  const dy = targetHold.y - launchOrigin.y;
+  const jumpDist = Math.hypot(dx * 1.04, Math.max(0, dy));
+
+  const maxDynoDist = target.bothHands
+    ? anatomy.maxArmReach * 2.08 * footImpulse * explosiveness
+    : anatomy.maxArmReach * 1.78 * footImpulse * explosiveness;
+
+  const reachRatio = jumpDist / Math.max(1, anatomy.maxArmReach);
+
+  // Check if single-hand dyno would rip the other staying hand off its hold
+  if (!target.bothHands) {
+    const otherHand: LimbId = limb === 'lh' ? 'rh' : 'lh';
+    const otherHandPos = getLimbWorldPos(otherHand, prevAssignment, prevFree, holdMap);
+    if (otherHandPos) {
+      const spanBetweenHands = dist(otherHandPos, targetHold);
+      const maxSpan = anatomy.wingspanCm * 1.05;
+      if (spanBetweenHands > maxSpan) {
+        return failEval(
+          startPose,
+          `目标点跨距 (${Math.round(spanBetweenHands)}cm) 超出单手滞留臂展 (${Math.round(maxSpan)}cm)，请改用「双飞 (G)」双手同时起跳！`,
+          {
+            isDyno: true,
+            reachRatio,
+            reachExcessCm: Math.round(spanBetweenHands - maxSpan),
+            staminaCost: 16,
+          }
+        );
+      }
+    }
+  }
+
+  if (jumpDist > maxDynoDist) {
+    const gapCm = Math.max(1, Math.round(jumpDist - maxDynoDist));
+    return failEval(
+      startPose,
+      `${target.bothHands ? '双手飞跃' : '动态飞跃'}起跳高度/距离不足（差约 ${gapCm}cm），建议先踩高脚点或双脚蹬墙蓄力`,
+      {
+        isDyno: true,
+        isDoubleDyno: target.bothHands,
+        reachRatio,
+        reachExcessCm: gapCm,
+        staminaCost: 20,
+      }
+    );
+  }
+
+  // Decide whether feet cut loose on landing
+  let cutsFeet = target.bothHands;
+  if (!cutsFeet) {
+    const testKeepFeet = applyLimbTarget(prevAssignment, prevFree, limb, target, false);
+    const keepPose = solvePose(
+      testKeepFeet.assignment,
+      holdMap,
+      anatomy,
+      profile.flexibility,
+      undefined,
+      freeOverrides(testKeepFeet.free)
+    );
+    const maxLegStretch = Math.max(keepPose.stretchRatios.lf, keepPose.stretchRatios.rf);
+    if (maxLegStretch > 1.01 || jumpDist > anatomy.maxArmReach * 0.96) {
+      cutsFeet = true;
+    }
+  }
+
+  const next = applyLimbTarget(prevAssignment, prevFree, limb, target, cutsFeet);
+  const nextPose = solvePose(
+    next.assignment,
+    holdMap,
+    anatomy,
+    profile.flexibility,
+    undefined,
+    freeOverrides(next.free)
+  );
+
+  // Catch grip quality on impact
+  const spec = HOLD_SPECS[targetHold.type];
+  const alignLimb: LimbId = target.bothHands ? 'rh' : limb;
+  const { alignment, angleDiffDeg } = computeHoldAlignment(targetHold, alignLimb, nextPose);
+  const strengthToWeight = (profile.gripStrength / 92) / Math.pow(anatomy.weightFactor, 0.5);
+  const catchFactor = spec.handGrip * alignment * clamp(strengthToWeight, 0.74, 1.32);
+  const gripScore = clamp(Math.round(catchFactor * 100), 0, 100);
+
+  const minCatch = target.bothHands ? 0.36 : 0.43;
+  if (alignment < 0.32) {
+    return failEval(
+      nextPose,
+      `飞跃抓点角度偏离 ${Math.round(angleDiffDeg)}°，滞空冲击下打滑脱落`,
+      {
+        isDyno: true,
+        isDoubleDyno: target.bothHands,
+        cutsFeet,
+        reachRatio,
+        reachExcessCm: 0,
+        gripScore,
+        directionAlignment: alignment,
+        staminaCost: 22,
+      }
+    );
+  }
+
+  if (catchFactor < minCatch) {
+    return failEval(
+      nextPose,
+      `飞跃冲击力过大，未能抓停 #${targetHold.label}（${spec.shortZh}抓握面不足）`,
+      {
+        isDyno: true,
+        isDoubleDyno: target.bothHands,
+        cutsFeet,
+        reachRatio,
+        reachExcessCm: 0,
+        gripScore,
+        directionAlignment: alignment,
+        staminaCost: 22,
+      }
+    );
+  }
+
+  if (target.bothHands) {
+    warnings.push('双手大飞跃 (Double Dyno)！落地后双脚切脚悬空，下一步请找脚点稳住摆荡');
+  } else if (cutsFeet) {
+    warnings.push('大跨距动态飞跃并切脚悬空 (Cut-loose)，注意控制摆荡');
+  } else {
+    warnings.push('动态死点出手 (Deadpoint)，保留脚点快速抓稳');
+  }
+
+  const intensity = clamp(jumpDist / Math.max(1, maxDynoDist), 0.35, 1);
+  const staminaCost =
+    Math.round(
+      clamp(
+        (target.bothHands ? 17 : 14) *
+          (0.75 + intensity * 0.55) *
+          (0.8 + spec.staminaMultiplier * 0.35) *
+          (anatomy.weightFactor / (profile.gripStrength / 92)),
+        10,
+        30
+      ) * 10
+    ) / 10;
+
+  const balanceScore = clamp(Math.round((cutsFeet ? 62 : 76) + alignment * 20 - intensity * 16), 28, 96);
+
+  return {
+    feasible: true,
+    rating: 'dyno',
+    reachRatio,
+    reachExcessCm: 0,
+    isDyno: true,
+    isDoubleDyno: target.bothHands,
+    cutsFeet,
+    gripScore,
+    balanceScore,
+    barnDoorRisk: cutsFeet ? 0.32 : 0.2,
+    directionAlignment: alignment,
+    staminaCost,
+    failReason: null,
+    warnings,
+    resultingPose: nextPose,
+  };
+}
+
+/**
+ * Evaluates a planned climbing move onto a hold, wall smear, dangling flag, or dynamic Dyno.
  */
 export function evaluateMove(
   prevAssignment: LimbAssignment,
@@ -191,6 +447,9 @@ export function evaluateMove(
   holds: Hold[],
   profile: ClimberProfile
 ): MoveEvaluation {
+  if (target.kind === 'dyno') {
+    return evaluateDynoMove(prevAssignment, prevFree, limb, target, holds, profile);
+  }
   const holdMap = buildHoldMap(holds);
   const anatomy = computeAnatomy(profile);
   const isHand = LIMB_META[limb].isHand;
@@ -667,7 +926,7 @@ export function evaluateBetaSequence(
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const evaluation = evaluateMove(current, free, step.limb, step.target, holds, profile);
-    const applied = applyLimbTarget(current, free, step.limb, step.target);
+    const applied = applyLimbTarget(current, free, step.limb, step.target, Boolean(evaluation.cutsFeet));
     stamina = Math.max(0, Math.round((stamina - evaluation.staminaCost) * 10) / 10);
     const pumpedOut = stamina <= 0;
 

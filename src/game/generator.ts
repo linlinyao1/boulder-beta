@@ -1,8 +1,8 @@
 import { CLIMBER_PRESETS, computeAnatomy } from './climber';
 import { ALL_LIMBS, HOLD_COLORS, HOLD_SPECS, LIMB_META, renumberHolds } from './holds';
 import { clamp, dist } from './ik';
-import { emptyFreeMap } from './contact';
-import { buildHoldMap, evaluateHoldMove, getInitialAssignment, isTopReached } from './physics';
+import { applyLimbTarget, dynoTarget, emptyFreeMap, holdTarget } from './contact';
+import { buildHoldMap, evaluateMove, getInitialAssignment, isTopReached } from './physics';
 import {
   BetaStep,
   ClimberProfile,
@@ -10,6 +10,7 @@ import {
   HoldType,
   LimbAssignment,
   LimbId,
+  LimbTarget,
   RouteProblem,
   WALL_WIDTH_CM,
 } from './types';
@@ -402,44 +403,70 @@ export function suggestBeta(
         });
 
         for (const target of candidates) {
-          const ev = evaluateHoldMove(node.assignment, limb, target.id, holds, profile, emptyFreeMap());
-          if (!ev.feasible) continue;
-
-          const newStamina = node.stamina - ev.staminaCost;
-          if (newStamina <= 2) continue;
-
-          const nextAssignment: LimbAssignment = { ...node.assignment, [limb]: target.id };
-          const key = stateKey(nextAssignment);
-          const prevBestStam = visited.get(key);
-          if (prevBestStam !== undefined && prevBestStam >= newStamina - 1) continue;
-          visited.set(key, newStamina);
-
-          const step: BetaStep = {
-            id: nextUid('step'),
-            limb,
-            target: { kind: 'hold', holdId: target.id },
-          };
-          const steps = [...node.steps, step];
-
-          if (isTopReached(nextAssignment, holds)) {
-            return { solved: true, steps, bestProgressY: topTarget.y };
+          const freeMap = emptyFreeMap();
+          const candidatesTargets: LimbTarget[] = [holdTarget(target.id)];
+          // For hands on catchable holds above current stance, also allow explicit Single/Double Dyno!
+          if (isHand && target.y > maxHandY + 12) {
+            candidatesTargets.push(dynoTarget(target.id, false));
+            if (limb === 'rh') {
+              // Only evaluate Double Dyno once per hold per node
+              candidatesTargets.push(dynoTarget(target.id, true));
+            }
           }
 
-          // Small bonus for alternating limbs naturally
-          const altBonus = node.lastLimb !== limb ? 4 : 0;
-          const ratingPenalty = ev.rating === 'dyno' ? -8 : ev.rating === 'hard' ? -3 : 0;
-          const sc = scoreState(nextAssignment, newStamina, steps.length) + altBonus + ratingPenalty;
+          for (const limbTarget of candidatesTargets) {
+            const ev = evaluateMove(node.assignment, freeMap, limb, limbTarget, holds, profile);
+            if (!ev.feasible) continue;
 
-          const child: SearchNode = {
-            assignment: nextAssignment,
-            steps,
-            stamina: newStamina,
-            score: sc,
-            lastLimb: limb,
-          };
+            // Skip explicit dyno if static hold already worked cleanly for the same hold
+            if (limbTarget.kind === 'dyno' && !limbTarget.bothHands) {
+              const staticEv = evaluateMove(node.assignment, freeMap, limb, holdTarget(target.id), holds, profile);
+              if (staticEv.feasible) continue;
+            }
 
-          if (sc > bestNode.score) bestNode = child;
-          nextBeam.push(child);
+            const newStamina = node.stamina - ev.staminaCost;
+            if (newStamina <= 2) continue;
+
+            const applied = applyLimbTarget(
+              node.assignment,
+              freeMap,
+              limb,
+              limbTarget,
+              Boolean(ev.cutsFeet)
+            );
+            const nextAssignment = applied.assignment;
+            const key = stateKey(nextAssignment);
+            const prevBestStam = visited.get(key);
+            if (prevBestStam !== undefined && prevBestStam >= newStamina - 1) continue;
+            visited.set(key, newStamina);
+
+            const step: BetaStep = {
+              id: nextUid('step'),
+              limb,
+              target: limbTarget,
+            };
+            const steps = [...node.steps, step];
+
+            if (isTopReached(nextAssignment, holds)) {
+              return { solved: true, steps, bestProgressY: topTarget.y };
+            }
+
+            const altBonus = node.lastLimb !== limb ? 4 : 0;
+            const ratingPenalty =
+              limbTarget.kind === 'dyno' ? -12 : ev.rating === 'dyno' ? -8 : ev.rating === 'hard' ? -3 : 0;
+            const sc = scoreState(nextAssignment, newStamina, steps.length) + altBonus + ratingPenalty;
+
+            const child: SearchNode = {
+              assignment: nextAssignment,
+              steps,
+              stamina: newStamina,
+              score: sc,
+              lastLimb: limb,
+            };
+
+            if (sc > bestNode.score) bestNode = child;
+            nextBeam.push(child);
+          }
         }
       }
     }

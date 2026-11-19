@@ -79,10 +79,11 @@ export interface FreeLimbMap {
 export type LimbTarget =
   | { kind: 'hold'; holdId: string }
   | { kind: 'smear'; x: number; y: number }
-  | { kind: 'flag'; x: number; y: number };
+  | { kind: 'flag'; x: number; y: number }
+  | { kind: 'dyno'; holdId: string; bothHands: boolean };
 
 /** Planner placement mode for the active limb */
-export type PlanContactMode = 'hold' | 'smear' | 'flag';
+export type PlanContactMode = 'hold' | 'smear' | 'flag' | 'dyno' | 'doubleDyno';
 
 export interface SolvedPose {
   pelvis: Vec2;
@@ -115,6 +116,8 @@ export interface MoveEvaluation {
   reachRatio: number; // moving limb reach ratio at catch
   reachExcessCm: number; // >0 if beyond static reach
   isDyno: boolean;
+  isDoubleDyno?: boolean;
+  cutsFeet?: boolean; // true when a big dynamic leap cuts feet loose off the wall
   gripScore: number; // 0..100
   balanceScore: number; // 0..100
   barnDoorRisk: number; // 0..1 (higher = worse)

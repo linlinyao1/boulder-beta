@@ -59,6 +59,28 @@ export const PRESET_ROUTES: RouteProblem[] = [
     ]),
   },
   {
+    id: 'preset-v4-dyno',
+    name: '飞跃峡谷 Dyno',
+    grade: 'V4',
+    description: '专为动态飞跃设计：底部大把手双脚深蹲蓄力，用「单手飞跃 (D)」或「双飞 (G)」飞抓中段大把手，切脚摆荡后再上脚直冲完攀点！',
+    holdColor: '#6B4E9B',
+    holds: renumberHolds([
+      makeHold('vd-f1', 124, 52, 'foothold', 'normal', 0, 1.15, '#6B4E9B'),
+      makeHold('vd-f2', 194, 62, 'foothold', 'normal', 0, 1.15, '#6B4E9B'),
+      makeHold('vd-s1', 128, 134, 'jug', 'start', -12, 1.2, '#6B4E9B'),
+      makeHold('vd-s2', 186, 138, 'jug', 'start', 12, 1.2, '#6B4E9B'),
+      // Mid-wall catch jug after a dramatic diagonal Dyno gap!
+      makeHold('vd-catch', 262, 266, 'jug', 'normal', 10, 1.32, '#6B4E9B'),
+      // Recovery footholds below the catch jug after cutting feet
+      makeHold('vd-f3', 214, 152, 'foothold', 'normal', 0, 1.1, '#6B4E9B'),
+      makeHold('vd-f4', 286, 168, 'foothold', 'normal', 0, 1.1, '#6B4E9B'),
+      makeHold('vd-f5', 246, 224, 'foothold', 'normal', 0, 1.05, '#6B4E9B'),
+      makeHold('vd-vol', 184, 304, 'volume', 'normal', -10, 1.05, '#3D434C'),
+      // Final dynamic or static reach to TOP
+      makeHold('vd-top', 214, 398, 'jug', 'top', 0, 1.28, '#6B4E9B'),
+    ]),
+  },
+  {
     id: 'preset-v5-morpho',
     name: '身高分水岭',
     grade: 'V5',

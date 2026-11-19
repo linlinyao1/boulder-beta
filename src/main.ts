@@ -233,6 +233,8 @@ window.addEventListener('keydown', (e) => {
     else if (e.key.toLowerCase() === 'h') engine.setPlanContactMode('hold');
     else if (e.key.toLowerCase() === 's') engine.setPlanContactMode('smear');
     else if (e.key.toLowerCase() === 'f') engine.setPlanContactMode('flag');
+    else if (e.key.toLowerCase() === 'd') engine.setPlanContactMode('dyno');
+    else if (e.key.toLowerCase() === 'g') engine.setPlanContactMode('doubleDyno');
     else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       engine.undoBetaStep();
@@ -329,18 +331,24 @@ function renderStageTopDock(snap: EngineSnapshot): void {
         }).join('')}
       </div>
       <div class="dock-divider"></div>
-      <div class="limb-dock" title="接触方式：抓点 / 踩墙 / 悬空">
+      <div class="limb-dock" title="动作方式：抓点 / 踩墙 / 悬空 / 单手飞跃 / 双手齐飞">
         ${(
           [
             ['hold', '抓点', 'H'],
             ['smear', '踩墙', 'S'],
             ['flag', '悬空', 'F'],
+            ['dyno', '飞跃', 'D'],
+            ['doubleDyno', '双飞', 'G'],
           ] as [PlanContactMode, string, string][]
         )
           .map(
             ([mode, label, key]) => `
           <button class="limb-btn ${snap.planContactMode === mode ? 'active' : ''}" data-cmode="${mode}" style="${
-              snap.planContactMode === mode ? 'border-color:#181d22;' : ''
+              snap.planContactMode === mode
+                ? mode === 'dyno' || mode === 'doubleDyno'
+                  ? 'border-color:#d97706;color:#b45309;'
+                  : 'border-color:#181d22;'
+                : ''
             }">
             <span>${label}</span>
             <span class="kbd-hint">${key}</span>
@@ -441,7 +449,12 @@ function renderStageBottomPill(snap: EngineSnapshot): void {
       stageBottomPill.classList.add('hidden');
       return;
     }
-    const limbName = LIMB_META[snap.activeLimb].nameZh;
+    const limbName =
+      snap.planContactMode === 'doubleDyno'
+        ? '双手齐飞'
+        : snap.planContactMode === 'dyno'
+          ? `${LIMB_META[snap.activeLimb].nameZh}飞跃`
+          : LIMB_META[snap.activeLimb].nameZh;
     const detail = ev.feasible
       ? `体能 -${ev.staminaCost}% · 抓握 ${ev.gripScore} · 稳定 ${ev.balanceScore}${
           ev.warnings[0] ? ` · ${ev.warnings[0]}` : ''
@@ -712,7 +725,7 @@ function renderPlanPanel(snap: EngineSnapshot): void {
     <div class="route-desc-box">
       ${snap.routeDescription}
       <div style="margin-top:6px;color:var(--ink-muted);">
-        接触方式：选「抓点」点岩点；选「踩墙」点空墙摩擦顶墙；选「悬空」点空墙做配重摆腿/摆手（快捷键 H / S / F）。
+        动作模式：抓点(H) · 踩墙(S) · 悬空(F) · <strong>单手飞跃(D)</strong> · <strong>双手齐飞(G)</strong>。飞跃需踩稳脚下支点蓄力起跳！
       </div>
     </div>
 
@@ -739,30 +752,47 @@ function renderPlanPanel(snap: EngineSnapshot): void {
       ${snap.betaTraces
         .map((tr, i) => {
           const t = tr.step.target;
-          const h = t.kind === 'hold' ? holdMap.get(t.holdId) : undefined;
+          const h = t.kind === 'hold' || t.kind === 'dyno' ? holdMap.get(t.holdId) : undefined;
           const m = LIMB_META[tr.step.limb];
           const ev = tr.evaluation;
           const isFail = !ev.feasible || tr.pumpedOut;
           const isActive = snap.inspectedStepIndex === i;
+          const isDoubleDyno = t.kind === 'dyno' && t.bothHands;
+          const actorLabel = isDoubleDyno ? '双手' : m.nameZh;
           const dest =
-            t.kind === 'hold'
+            t.kind === 'hold' || t.kind === 'dyno'
               ? `#${h?.label ?? '?'} ${h ? HOLD_SPECS[h.type].shortZh : ''}`
               : targetLabel(t);
           const subText = isFail
             ? tr.pumpedOut && ev.feasible
               ? '体能耗尽 (0%)'
               : ev.failReason ?? '动作失败'
-            : `${ev.isDyno ? '动态飞跃 · ' : t.kind === 'smear' ? '踩墙 · ' : t.kind === 'flag' ? '悬空 · ' : ev.rating === 'hard' ? '吃力 · ' : '稳妥 · '}体能剩 ${Math.round(
-                tr.staminaAfter
-              )}%`;
+            : `${
+                isDoubleDyno
+                  ? '双手飞跃 · 切脚悬空 · '
+                  : t.kind === 'dyno' || ev.isDyno
+                    ? ev.cutsFeet
+                      ? '动态飞跃 · 切脚 · '
+                      : '动态死点 · '
+                    : t.kind === 'smear'
+                      ? '踩墙 · '
+                      : t.kind === 'flag'
+                        ? '悬空 · '
+                        : ev.rating === 'hard'
+                          ? '吃力 · '
+                          : '稳妥 · '
+              }体能剩 ${Math.round(tr.staminaAfter)}%`;
 
           return `
             <div class="beta-item ${isActive ? 'active' : ''} ${isFail ? 'fail' : ''}" data-step-idx="${i}">
-              <span class="beta-step-num" style="background:${isFail ? '#DC2626' : m.color};">${i + 1}</span>
+              <span class="beta-step-num" style="background:${
+                isFail ? '#DC2626' : t.kind === 'dyno' ? '#D97706' : m.color
+              };">${i + 1}</span>
               <div class="beta-item-main">
                 <div class="beta-item-title">
-                  <span>${m.nameZh} → ${dest}</span>
+                  <span>${actorLabel} → ${dest}</span>
                   ${h?.role === 'top' ? '<span class="grade-pill" style="font-size:9px;padding:1px 4px;">TOP</span>' : ''}
+                  ${t.kind === 'dyno' ? `<span class="grade-pill" style="font-size:9px;padding:1px 4px;background:#d97706;">${t.bothHands ? '双飞' : 'DYNO'}</span>` : ''}
                   ${t.kind === 'smear' ? '<span class="grade-pill" style="font-size:9px;padding:1px 4px;background:#0d9488;">踩墙</span>' : ''}
                   ${t.kind === 'flag' ? '<span class="grade-pill" style="font-size:9px;padding:1px 4px;background:#6b7280;">悬空</span>' : ''}
                 </div>
@@ -825,9 +855,10 @@ function renderClimbPanel(snap: EngineSnapshot): void {
       ${snap.betaTraces
         .map((tr, i) => {
           const t = tr.step.target;
-          const h = t.kind === 'hold' ? holdMap.get(t.holdId) : undefined;
+          const h = t.kind === 'hold' || t.kind === 'dyno' ? holdMap.get(t.holdId) : undefined;
+          const isDoubleDyno = t.kind === 'dyno' && t.bothHands;
           const dest =
-            t.kind === 'hold'
+            t.kind === 'hold' || t.kind === 'dyno'
               ? `#${h?.label ?? '?'} ${h ? HOLD_SPECS[h.type].shortZh : ''}`
               : targetLabel(t);
           const m = LIMB_META[tr.step.limb];
@@ -844,10 +875,10 @@ function renderClimbPanel(snap: EngineSnapshot): void {
               isDone || isCurrent || isFailedStep ? 1 : 0.65
             }">
               <span class="beta-step-num" style="background:${
-                isFailedStep ? '#DC2626' : isDone ? '#15803D' : m.color
+                isFailedStep ? '#DC2626' : isDone ? '#15803D' : t.kind === 'dyno' ? '#D97706' : m.color
               };">${isDone && !isFailedStep ? '✓' : i + 1}</span>
               <div class="beta-item-main">
-                <div class="beta-item-title">${m.nameZh} → ${dest}</div>
+                <div class="beta-item-title">${isDoubleDyno ? '双手齐飞' : m.nameZh} → ${dest}</div>
                 <div class="beta-item-sub">
                   抓握 ${tr.evaluation.gripScore} · 稳定 ${tr.evaluation.balanceScore} · 消耗 ${
             tr.evaluation.staminaCost

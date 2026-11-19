@@ -110,6 +110,45 @@ describe('Bouldering physics & Beta solver', () => {
     expect(backFlag.feasible, backFlag.failReason ?? 'back-flag should be allowed').toBe(true);
   });
 
+  it('supports Single & Double Dyno with foot push-off, cut-loose, and solves V4 Dyno Canyon', () => {
+    const dynoRoute = PRESET_ROUTES.find((r) => r.id === 'preset-v4-dyno')!;
+    const standard = CLIMBER_PRESETS[1];
+    const init = getInitialAssignment(dynoRoute.holds, standard);
+
+    // Static reach to the big jump jug vd-catch should be unreachable statically
+    const staticTry = evaluateHoldMove(init, 'rh', 'vd-catch', dynoRoute.holds, standard);
+    expect(staticTry.feasible).toBe(false);
+
+    // Explicit Double Dyno from start stance should succeed and cut feet loose!
+    const doubleDyno = evaluateMove(
+      init,
+      emptyFreeMap(),
+      'rh',
+      { kind: 'dyno', holdId: 'vd-catch', bothHands: true },
+      dynoRoute.holds,
+      standard
+    );
+    expect(doubleDyno.feasible, doubleDyno.failReason ?? 'double dyno should succeed').toBe(true);
+    expect(doubleDyno.isDyno).toBe(true);
+    expect(doubleDyno.cutsFeet).toBe(true);
+
+    // Cannot Dyno when both feet are dangling off the wall
+    const noFeetDyno = evaluateMove(
+      { ...init, lf: null, rf: null },
+      emptyFreeMap(),
+      'rh',
+      { kind: 'dyno', holdId: 'vd-catch', bothHands: true },
+      dynoRoute.holds,
+      standard
+    );
+    expect(noFeetDyno.feasible).toBe(false);
+
+    // AI Beta solver should solve V4 Dyno Canyon using Dyno!
+    const sol = suggestBeta(dynoRoute.holds, standard, 24);
+    expect(sol.solved).toBe(true);
+    expect(sol.steps.some((s) => s.target.kind === 'dyno')).toBe(true);
+  });
+
   it('shows real anthropometric difference between short and long-wingspan climbers on V5 Morpho', () => {
     const morpho = PRESET_ROUTES.find((r) => r.id === 'preset-v5-morpho')!;
     const shortClimber = CLIMBER_PRESETS[0];

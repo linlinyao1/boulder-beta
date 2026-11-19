@@ -25,35 +25,65 @@ export function flagTarget(x: number, y: number): LimbTarget {
   return { kind: 'flag', x, y };
 }
 
+export function dynoTarget(holdId: string, bothHands = false): LimbTarget {
+  return { kind: 'dyno', holdId, bothHands };
+}
+
 export function freeFromTarget(target: LimbTarget): FreeContact | null {
-  if (target.kind === 'hold') return null;
-  return { mode: target.kind, x: target.x!, y: target.y! };
+  if (target.kind === 'hold' || target.kind === 'dyno') return null;
+  return { mode: target.kind, x: target.x, y: target.y };
 }
 
 export function targetLabel(target: LimbTarget, holdLabel?: number): string {
   if (target.kind === 'hold') return holdLabel != null ? `#${holdLabel}` : '岩点';
+  if (target.kind === 'dyno') {
+    const base = holdLabel != null ? `#${holdLabel}` : '岩点';
+    return target.bothHands ? `${base} (双手飞跃)` : `${base} (动态飞跃)`;
+  }
   if (target.kind === 'smear') return '踩墙/蹭墙';
   return '悬空配重';
 }
 
 /**
  * Apply a planned limb target onto assignment + free-contact maps.
+ * When `cutsFeet` is true (big Dyno / Double Dyno), both feet cut loose off the wall.
  */
 export function applyLimbTarget(
   assignment: LimbAssignment,
   free: FreeLimbMap,
   limb: LimbId,
-  target: LimbTarget
+  target: LimbTarget,
+  cutsFeet = false
 ): { assignment: LimbAssignment; free: FreeLimbMap } {
   const nextAssign = { ...assignment };
   const nextFree = cloneFreeMap(free);
 
   if (target.kind === 'hold') {
-    nextAssign[limb] = target.holdId!;
+    nextAssign[limb] = target.holdId;
     nextFree[limb] = null;
+  } else if (target.kind === 'dyno') {
+    if (target.bothHands) {
+      nextAssign.lh = target.holdId;
+      nextAssign.rh = target.holdId;
+      nextFree.lh = null;
+      nextFree.rh = null;
+      nextAssign.lf = null;
+      nextAssign.rf = null;
+      nextFree.lf = null;
+      nextFree.rf = null;
+    } else {
+      nextAssign[limb] = target.holdId;
+      nextFree[limb] = null;
+      if (cutsFeet) {
+        nextAssign.lf = null;
+        nextAssign.rf = null;
+        nextFree.lf = null;
+        nextFree.rf = null;
+      }
+    }
   } else {
     nextAssign[limb] = null;
-    nextFree[limb] = { mode: target.kind, x: target.x!, y: target.y! };
+    nextFree[limb] = { mode: target.kind, x: target.x, y: target.y };
   }
 
   return { assignment: nextAssign, free: nextFree };

@@ -337,6 +337,29 @@ function drawReachArc(ctx: CanvasRenderingContext2D, tr: WallTransform, state: R
   const anatomy = computeAnatomy(state.profile);
   const limb = state.activeLimb;
   const meta = LIMB_META[limb];
+  const isDynoMode = state.planContactMode === 'dyno' || state.planContactMode === 'doubleDyno';
+
+  if (isDynoMode) {
+    const isDouble = state.planContactMode === 'doubleDyno';
+    const launchCenter = worldToScreen(
+      { x: state.pose.chest.x, y: state.pose.chest.y + 18 },
+      tr
+    );
+    const jumpPx = anatomy.maxArmReach * (isDouble ? 2.08 : 1.78) * tr.scale;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(launchCenter.x, launchCenter.y, jumpPx, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(217, 119, 6, 0.08)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(217, 119, 6, 0.78)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 5]);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
   const root = meta.isHand
     ? state.pose.shoulders[limb as 'lh' | 'rh']
     : state.pose.hips[limb as 'lf' | 'rf'];
@@ -592,7 +615,7 @@ function drawGymTape(ctx: CanvasRenderingContext2D, pos: Vec2, r: number, role: 
 
 function resolveTraceTarget(trace: BetaTraceStep, holdMap: Map<string, Hold>): Vec2 | null {
   const t = trace.step.target;
-  if (t.kind === 'hold') {
+  if (t.kind === 'hold' || t.kind === 'dyno') {
     const h = holdMap.get(t.holdId);
     return h ? { x: h.x, y: h.y } : null;
   }
@@ -657,7 +680,11 @@ function drawFreeContacts(
   }
 
   // Wall hover ghost for smear/flag placement
-  if (state.mode === 'plan' && state.wallHoverPos && state.planContactMode !== 'hold') {
+  if (
+    state.mode === 'plan' &&
+    state.wallHoverPos &&
+    (state.planContactMode === 'smear' || state.planContactMode === 'flag')
+  ) {
     const p = worldToScreen(state.wallHoverPos, tr);
     const meta = LIMB_META[state.activeLimb];
     ctx.save();
@@ -708,12 +735,20 @@ function drawBetaArrows(ctx: CanvasRenderingContext2D, tr: WallTransform, state:
     const cx = (p1.x + p2.x) / 2 + (-dy / len) * bend;
     const cy = (p1.y + p2.y) / 2 + (dx / len) * bend;
 
+    const isExplicitDyno = trace.step.target.kind === 'dyno';
+    const isDoubleDyno = trace.step.target.kind === 'dyno' && trace.step.target.bothHands;
+    const strokeCol = !trace.evaluation.feasible
+      ? '#DC2626'
+      : isExplicitDyno
+        ? '#D97706'
+        : meta.color;
+
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.strokeStyle = !trace.evaluation.feasible ? '#DC2626' : meta.color;
-    ctx.lineWidth = isActive ? 3 : 2;
+    ctx.strokeStyle = strokeCol;
+    ctx.lineWidth = isActive ? 3.2 : isExplicitDyno ? 2.6 : 2;
     if (trace.evaluation.isDyno) {
-      ctx.setLineDash([6, 4]);
+      ctx.setLineDash([7, 4]);
     } else if (!trace.evaluation.feasible) {
       ctx.setLineDash([3, 3]);
     }
@@ -732,7 +767,7 @@ function drawBetaArrows(ctx: CanvasRenderingContext2D, tr: WallTransform, state:
     const ang = Math.atan2(tanY, tanX);
 
     ctx.setLineDash([]);
-    ctx.fillStyle = !trace.evaluation.feasible ? '#DC2626' : meta.color;
+    ctx.fillStyle = strokeCol;
     ctx.beginPath();
     ctx.moveTo(ax + Math.cos(ang) * 5, ay + Math.sin(ang) * 5);
     ctx.lineTo(ax - Math.cos(ang - 0.55) * 7, ay - Math.sin(ang - 0.55) * 7);
@@ -745,7 +780,7 @@ function drawBetaArrows(ctx: CanvasRenderingContext2D, tr: WallTransform, state:
     const my = 0.25 * p1.y + 0.5 * cy + 0.25 * p2.y;
     ctx.beginPath();
     ctx.arc(mx, my, isActive ? 10 : 8.5, 0, Math.PI * 2);
-    ctx.fillStyle = !trace.evaluation.feasible ? '#DC2626' : meta.color;
+    ctx.fillStyle = strokeCol;
     ctx.fill();
     ctx.strokeStyle = '#FFFFFF';
     ctx.lineWidth = 1.5;
@@ -756,6 +791,12 @@ function drawBetaArrows(ctx: CanvasRenderingContext2D, tr: WallTransform, state:
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(String(idx + 1), mx, my + 0.5);
+
+    if (isExplicitDyno) {
+      ctx.font = '700 8.5px "Space Grotesk", sans-serif';
+      ctx.fillStyle = strokeCol;
+      ctx.fillText(isDoubleDyno ? '双飞' : 'DYNO', mx, my - 13);
+    }
     ctx.restore();
   });
 }

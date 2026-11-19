@@ -338,7 +338,7 @@ body,
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 10px;
+  padding: 5px 9px;
   border-radius: 7px;
   border: 1.5px solid transparent;
   background: var(--panel-subtle);
@@ -348,6 +348,8 @@ body,
   font-weight: 600;
   cursor: pointer;
   transition: all 0.12s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .limb-btn:hover {
@@ -391,6 +393,8 @@ body,
   user-select: none;
   padding: 3px 6px;
   border-radius: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .toggle-chip:hover {
@@ -994,5 +998,9 @@ input[type='range'] {
   .stage-top-dock {
     overflow-x: auto;
     justify-content: flex-start;
+    scrollbar-width: none;
+  }
+  .stage-top-dock::-webkit-scrollbar {
+    display: none;
   }
 }
