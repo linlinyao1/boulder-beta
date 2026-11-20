@@ -1,0 +1,16 @@
+---
+description: Enforce Semantic Versioning, changelog updates, and Git tags on every shipped iteration of boulder-beta
+globs:
+alwaysApply: true
+---
+
+# Version Management Rule (`boulder-beta`)
+
+Every shipped iteration (feature, physics/difficulty change, or bug fix pushed to `main`) MUST update the version cleanly:
+
+1. **Follow SemVer (`MAJOR.MINOR.PATCH`)** in `package.json`:
+   - `PATCH` (`x.y.Z`): bug fixes, physics/difficulty calibration, visual polish
+   - `MINOR` (`x.Y.0`): new gameplay features, hold types, UI tools, presets
+   - `MAJOR` (`X.0.0`): breaking save/architecture overhauls
+2. **Update release notes** in BOTH `src/game/version.ts` (`RELEASE_NOTES` top entry) and `CHANGELOG.md` before committing.
+3. **Create an annotated Git tag** matching the exact version (`git tag -a vX.Y.Z -m "..."`) and push tags with `git push origin main --follow-tags` so every deployed GitHub Pages build maps cleanly to a version tag and in-app version pill.

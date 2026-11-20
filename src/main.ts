@@ -14,6 +14,7 @@ import {
 } from './game/holds';
 import { PRESET_ROUTES } from './game/presets';
 import { HoldRole, HoldStyleFamily, HoldType, PlanContactMode } from './game/types';
+import { APP_VERSION, BUILD_TIME, GIT_COMMIT, RELEASE_NOTES } from './game/version';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 
@@ -24,6 +25,7 @@ app.innerHTML = `
         <div class="brand-mark">
           <span class="brand-dot"></span>
           <span>BETA 抱石台</span>
+          <button id="ui-version-btn" class="version-pill mono" title="查看版本更新日志 (v${APP_VERSION} · ${GIT_COMMIT})">v${APP_VERSION}</button>
         </div>
         <div class="route-meta">
           <span id="ui-grade-pill" class="grade-pill">V1</span>
@@ -130,6 +132,10 @@ app.innerHTML = `
             <div class="section-title">经典预设线路</div>
             <button id="mb-clear-wall" class="btn btn-sm">清空自定线</button>
           </div>
+          <div style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
+            <span class="section-sub mono">当前版本 v${APP_VERSION} (${GIT_COMMIT})</span>
+            <button id="mb-version-btn" class="btn btn-sm">更新日志</button>
+          </div>
           <div class="mobile-preset-list" id="mb-preset-list">
             ${PRESET_ROUTES.map(
               (r, idx) => `
@@ -222,6 +228,33 @@ app.innerHTML = `
         <section class="sidebar-section" id="ui-mode-panel" style="flex:1;"></section>
       </aside>
     </main>
+    <div id="ui-version-modal" class="version-modal-backdrop hidden" role="dialog" aria-modal="true" aria-label="版本更新日志">
+      <div class="version-modal">
+        <div class="version-modal-head">
+          <div>
+            <div class="section-title">BETA 抱石台 · 版本日志</div>
+            <div class="section-sub mono">当前版本 v${APP_VERSION} · commit ${GIT_COMMIT}${BUILD_TIME ? ` · ${BUILD_TIME}` : ''}</div>
+          </div>
+          <button id="ui-version-close" class="btn btn-sm">关闭</button>
+        </div>
+        <div class="version-modal-body">
+          ${RELEASE_NOTES.map(
+            (rel, idx) => `
+              <div class="release-card ${idx === 0 ? 'latest' : ''}">
+                <div class="release-card-head">
+                  <span class="release-tag mono">v${rel.version}</span>
+                  <strong>${rel.title}</strong>
+                  <span class="release-date mono">${rel.date}</span>
+                </div>
+                <ul class="release-list">
+                  ${rel.highlights.map((item) => `<li>${item}</li>`).join('')}
+                </ul>
+              </div>
+            `
+          ).join('')}
+        </div>
+      </div>
+    </div>
   </div>
 `;
 
@@ -238,6 +271,31 @@ const resultOverlay = document.querySelector<HTMLDivElement>('#ui-result-overlay
 const modePanel = document.querySelector<HTMLElement>('#ui-mode-panel')!;
 const mobilePad = document.querySelector<HTMLDivElement>('#ui-mobile-pad')!;
 const zoomResetBtn = document.querySelector<HTMLButtonElement>('#ui-zoom-reset')!;
+const versionBtn = document.querySelector<HTMLButtonElement>('#ui-version-btn')!;
+const mbVersionBtn = document.querySelector<HTMLButtonElement>('#mb-version-btn')!;
+const versionModal = document.querySelector<HTMLDivElement>('#ui-version-modal')!;
+const versionCloseBtn = document.querySelector<HTMLButtonElement>('#ui-version-close')!;
+
+const openVersionModal = (): void => {
+  versionModal.classList.remove('hidden');
+};
+const closeVersionModal = (): void => {
+  versionModal.classList.add('hidden');
+};
+versionBtn.addEventListener('click', openVersionModal);
+mbVersionBtn.addEventListener('click', () => {
+  setMobileSheet('none');
+  openVersionModal();
+});
+versionCloseBtn.addEventListener('click', closeVersionModal);
+versionModal.addEventListener('click', (e) => {
+  if (e.target === versionModal) closeVersionModal();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !versionModal.classList.contains('hidden')) {
+    closeVersionModal();
+  }
+});
 const sidebarEl = document.querySelector<HTMLElement>('#ui-sidebar')!;
 const sheetBackdrop = document.querySelector<HTMLDivElement>('#ui-sheet-backdrop')!;
 const mbRouteBtn = document.querySelector<HTMLButtonElement>('#mb-route-btn')!;

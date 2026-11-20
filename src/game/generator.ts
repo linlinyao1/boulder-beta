@@ -640,7 +640,7 @@ export function generateRoute(
       ? g >= 8
         ? ['crimp', 'pinch', 'microcrimp', 'crimp']
         : g >= 5
-          ? ['crimp', 'pinch', 'sloper', 'crimp']
+          ? ['pinch', 'crimp', 'pinch', 'sloper']
           : bp.handPool
       : style === 'tech'
         ? g >= 8
@@ -814,7 +814,11 @@ export function generateRoute(
           type,
           role: 'normal',
           angle,
-          scale: clamp(bp.scaleBase + rand(-0.05, 0.05), 0.76, 1.24),
+          scale: clamp(
+            bp.scaleBase + (isRecoveryPass ? 0.06 : 0) + rand(-0.05, 0.05),
+            0.76,
+            1.24
+          ),
           color,
           styleFamily: holdFamily,
           shapeVariant: pickVariantForFamily(type),

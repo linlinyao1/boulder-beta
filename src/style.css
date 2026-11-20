@@ -1381,3 +1381,117 @@ input[type='range'] {
     display: block;
   }
 }
+
+/* ==================== VERSION BADGE & CHANGELOG MODAL ==================== */
+.version-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 99px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel-subtle);
+  color: var(--ink-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.version-pill:hover {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #f7f8f5;
+}
+
+.version-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(18, 22, 26, 0.45);
+  backdrop-filter: blur(4px);
+}
+
+.version-modal-backdrop.hidden {
+  display: none;
+}
+
+.version-modal {
+  width: min(560px, 100%);
+  max-height: min(82vh, 720px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 22px 48px rgba(15, 20, 26, 0.24);
+  overflow: hidden;
+}
+
+.version-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-subtle);
+}
+
+.version-modal-body {
+  padding: 14px 16px 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.release-card {
+  padding: 11px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+}
+
+.release-card.latest {
+  border-color: var(--ink);
+  box-shadow: 0 2px 10px rgba(24, 29, 34, 0.06);
+}
+
+.release-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.release-tag {
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: var(--ink);
+  color: #f7f8f5;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.release-date {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+.release-list {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--ink-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
