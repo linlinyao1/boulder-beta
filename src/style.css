@@ -309,6 +309,54 @@ body,
   touch-action: none;
 }
 
+.stage-tilt-stepper {
+  position: absolute;
+  top: 108px;
+  left: 14px;
+  width: 94px;
+  display: grid;
+  grid-template-columns: 26px 1fr 26px;
+  align-items: center;
+  background: rgba(247, 248, 245, 0.94);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 2px;
+  box-shadow: 0 3px 10px rgba(24, 29, 34, 0.12);
+  z-index: 12;
+}
+
+.tilt-step-btn {
+  border: none;
+  background: var(--panel-subtle);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  height: 24px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tilt-step-btn:hover:not(:disabled) {
+  background: var(--ink);
+  color: #f7f8f5;
+}
+
+.tilt-step-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.tilt-step-val {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
 .zoom-reset-pill {
   position: absolute;
   top: 10px;
@@ -1133,6 +1181,13 @@ input[type='range'] {
   .canvas-container {
     flex: 1;
     min-height: 0;
+  }
+
+  .stage-tilt-stepper {
+    top: 94px;
+    left: 10px;
+    width: 82px;
+    grid-template-columns: 24px 1fr 24px;
   }
 
   /* Bottom Thumb Control Pad (zero horizontal scroll!) */

@@ -16,6 +16,7 @@ import {
   getInitialAssignment,
 } from './physics';
 import { PRESET_ROUTES } from './presets';
+import { computeWallTransform, screenToWorld, worldToScreen } from './renderer';
 
 describe('Bouldering physics, V1–V11 grades & Kilter wall angle', () => {
   it('solves all preset routes for their grade-appropriate climber tier with zero leg pass-throughs', () => {
@@ -76,6 +77,20 @@ describe('Bouldering physics, V1–V11 grades & Kilter wall angle', () => {
     const grade0 = estimateRouteGrade(v3.holds, 0);
     const grade45 = estimateRouteGrade(v3.holds, 45);
     expect(grade45.numericGrade).toBeGreaterThan(grade0.numericGrade + 2);
+
+    // 3D perspective wall projection must visibly taper/foreshorten AND invert losslessly!
+    for (const deg of [-10, 0, 30, 55]) {
+      const tr = computeWallTransform(900, 760, undefined, deg);
+      const pt = { x: 142, y: 288 };
+      const roundTrip = screenToWorld(worldToScreen(pt, tr), tr);
+      expect(Math.abs(roundTrip.x - pt.x)).toBeLessThan(1e-6);
+      expect(Math.abs(roundTrip.y - pt.y)).toBeLessThan(1e-6);
+    }
+    const trSlab = computeWallTransform(900, 760, undefined, -10);
+    const trSteep = computeWallTransform(900, 760, undefined, 55);
+    expect(trSteep.topScale).toBeGreaterThan(trSteep.botScale);
+    expect(trSlab.topScale).toBeLessThan(trSlab.botScale);
+    expect(trSteep.wallPixelH).toBeLessThan(trSlab.wallPixelH);
   });
 
   it('rejects inhuman leg crossing (left foot stepping to the right of right foot)', () => {

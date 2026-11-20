@@ -174,6 +174,7 @@ export class BoulderEngine {
   private routeGrade = '';
   private baseRouteGrade = '';
   private wallAngleDeg = 0;
+  private renderedWallAngle = 0;
   private baseWallAngleDeg = 0;
   private routeStyle: RouteStyle = 'balanced';
   private liveGradeEstimate: LiveGradeEstimate = {
@@ -272,11 +273,16 @@ export class BoulderEngine {
     this.canvas.height = Math.max(240, Math.floor(rect.height * dpr));
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.clampCamera(rect.width, rect.height);
-    this.transform = computeWallTransform(rect.width, rect.height, {
-      zoom: this.cameraZoom,
-      panX: this.cameraPanX,
-      panY: this.cameraPanY,
-    });
+    this.transform = computeWallTransform(
+      rect.width,
+      rect.height,
+      {
+        zoom: this.cameraZoom,
+        panX: this.cameraPanX,
+        panY: this.cameraPanY,
+      },
+      this.renderedWallAngle
+    );
   }
 
   public resetCamera(): void {
@@ -319,11 +325,16 @@ export class BoulderEngine {
     this.cameraZoom = nextZoom;
 
     this.clampCamera(rect.width, rect.height);
-    this.transform = computeWallTransform(rect.width, rect.height, {
-      zoom: this.cameraZoom,
-      panX: this.cameraPanX,
-      panY: this.cameraPanY,
-    });
+    this.transform = computeWallTransform(
+      rect.width,
+      rect.height,
+      {
+        zoom: this.cameraZoom,
+        panX: this.cameraPanX,
+        panY: this.cameraPanY,
+      },
+      this.renderedWallAngle
+    );
   }
 
   // ==================== PUBLIC ACTIONS ====================
@@ -357,6 +368,7 @@ export class BoulderEngine {
     this.routeGrade = route.grade;
     this.baseRouteGrade = route.grade;
     this.wallAngleDeg = route.wallAngleDeg ?? 0;
+    this.renderedWallAngle = this.wallAngleDeg;
     this.baseWallAngleDeg = this.wallAngleDeg;
     this.routeStyle = route.style ?? 'balanced';
     this.routeDescription = route.description;
@@ -912,6 +924,13 @@ export class BoulderEngine {
     this.lastFrameMs = nowMs;
     this.timeSec += rawDt;
 
+    // Smooth motorized hydraulic Kilter wall-tilt transition!
+    if (Math.abs(this.renderedWallAngle - this.wallAngleDeg) > 0.05) {
+      this.renderedWallAngle = lerp(this.renderedWallAngle, this.wallAngleDeg, Math.min(1, rawDt * 11));
+    } else {
+      this.renderedWallAngle = this.wallAngleDeg;
+    }
+
     this.updateParticles(rawDt);
 
     if (this.mode === 'plan') {
@@ -1362,7 +1381,7 @@ export class BoulderEngine {
         panX: this.cameraPanX,
         panY: this.cameraPanY,
       },
-      wallAngleDeg: this.wallAngleDeg,
+      wallAngleDeg: this.renderedWallAngle,
       mode: this.mode,
       holds: this.holds,
       profile: this.profile,
@@ -1594,11 +1613,16 @@ export class BoulderEngine {
           this.cameraPanY += sp.y - this.panLastScreen.y;
           this.panLastScreen = sp;
           this.clampCamera(rect.width, rect.height);
-          this.transform = computeWallTransform(rect.width, rect.height, {
-            zoom: this.cameraZoom,
-            panX: this.cameraPanX,
-            panY: this.cameraPanY,
-          });
+          this.transform = computeWallTransform(
+            rect.width,
+            rect.height,
+            {
+              zoom: this.cameraZoom,
+              panX: this.cameraPanX,
+              panY: this.cameraPanY,
+            },
+            this.renderedWallAngle
+          );
           this.canvas.style.cursor = 'grabbing';
           return;
         }

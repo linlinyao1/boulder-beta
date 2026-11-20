@@ -41,10 +41,15 @@ export interface CameraView {
 export interface WallTransform {
   wallLeft: number;
   wallTop: number;
+  wallBottom: number;
+  wallCenterX: number;
   wallPixelW: number;
   wallPixelH: number;
   padPixelH: number;
   scale: number; // px per cm
+  wallAngleDeg: number;
+  topScale: number;
+  botScale: number;
 }
 
 export interface RenderContextState {
@@ -103,19 +108,21 @@ const WALL_FACETS: { pts: [number, number][]; fill: string }[] = [
 export function computeWallTransform(
   canvasW: number,
   canvasH: number,
-  camera?: CameraView
+  camera?: CameraView,
+  wallAngleDeg = 0
 ): WallTransform {
   const padRatio = 0.085; // crash pad height as fraction of wall height
   const isCompact = canvasW <= 680;
-  const marginX = isCompact ? 30 : 44;
-  const marginTop = isCompact ? 12 : 62;
+  const marginX = isCompact ? 34 : 52;
+  const marginTop = isCompact ? 16 : 64;
   const marginBottom = isCompact ? 10 : 20;
 
   const availW = Math.max(200, canvasW - marginX * 2);
   const availH = Math.max(240, canvasH - marginTop - marginBottom);
 
   const totalUnitsH = WALL_HEIGHT_CM * (1 + padRatio);
-  const baseScale = Math.min(availW / WALL_WIDTH_CM, availH / totalUnitsH);
+  // Reserve a bit of horizontal room so steep 55° overhang top flare never clips
+  const baseScale = Math.min(availW / (WALL_WIDTH_CM * 1.09), availH / totalUnitsH);
 
   const baseW = WALL_WIDTH_CM * baseScale;
   const baseH = WALL_HEIGHT_CM * baseScale;
@@ -131,27 +138,56 @@ export function computeWallTransform(
   const cx = canvasW / 2;
   const cy = canvasH / 2;
 
+  const angle = clamp(wallAngleDeg, -10, 55);
+  const rad = (angle * Math.PI) / 180;
+  const tilt = Math.sin(rad); // -0.174 (slab) .. 0 (vert) .. +0.819 (55° overhang)
+  // Overhang: top leans closer to viewer (wider) & bottom recedes (narrower); Slab: inverse!
+  const topScale = 1 + tilt * 0.11;
+  const botScale = 1 - tilt * 0.165;
+  // Vertical foreshortening of tilted panel anchored at the crash pad
+  const heightFactor = 0.72 + 0.28 * Math.cos(rad);
+
   const scale = baseScale * zoom;
   const wallPixelW = baseW * zoom;
-  const wallPixelH = baseH * zoom;
+  const fullWallPixelH = baseH * zoom;
+  const wallPixelH = fullWallPixelH * heightFactor;
   const padPixelH = basePadH * zoom;
   const wallLeft = cx + (baseLeft - cx) * zoom + panX;
-  const wallTop = cy + (baseTop - cy) * zoom + panY;
+  const wallCenterX = wallLeft + wallPixelW / 2;
+  const nominalWallTop = cy + (baseTop - cy) * zoom + panY;
+  const wallBottom = nominalWallTop + fullWallPixelH;
+  const wallTop = wallBottom - wallPixelH;
 
-  return { wallLeft, wallTop, wallPixelW, wallPixelH, padPixelH, scale };
+  return {
+    wallLeft,
+    wallTop,
+    wallBottom,
+    wallCenterX,
+    wallPixelW,
+    wallPixelH,
+    padPixelH,
+    scale,
+    wallAngleDeg: angle,
+    topScale,
+    botScale,
+  };
 }
 
 export function worldToScreen(pt: Vec2, tr: WallTransform): Vec2 {
+  const u = pt.y / WALL_HEIGHT_CM;
+  const rowScale = tr.botScale + (tr.topScale - tr.botScale) * u;
   return {
-    x: tr.wallLeft + pt.x * tr.scale,
-    y: tr.wallTop + (WALL_HEIGHT_CM - pt.y) * tr.scale,
+    x: tr.wallCenterX + (pt.x - WALL_WIDTH_CM / 2) * tr.scale * rowScale,
+    y: tr.wallBottom - u * tr.wallPixelH,
   };
 }
 
 export function screenToWorld(pt: Vec2, tr: WallTransform): Vec2 {
+  const u = (tr.wallBottom - pt.y) / Math.max(1, tr.wallPixelH);
+  const rowScale = Math.max(0.4, tr.botScale + (tr.topScale - tr.botScale) * u);
   return {
-    x: (pt.x - tr.wallLeft) / tr.scale,
-    y: WALL_HEIGHT_CM - (pt.y - tr.wallTop) / tr.scale,
+    x: WALL_WIDTH_CM / 2 + (pt.x - tr.wallCenterX) / Math.max(0.01, tr.scale * rowScale),
+    y: u * WALL_HEIGHT_CM,
   };
 }
 
@@ -170,36 +206,56 @@ export function renderScene(
   height: number,
   state: RenderContextState
 ): WallTransform {
-  const tr = computeWallTransform(width, height, state.camera);
+  const wallAngle = state.wallAngleDeg ?? 0;
+  const tr = computeWallTransform(width, height, state.camera, wallAngle);
   ctx.clearRect(0, 0, width, height);
 
   // Studio concrete backdrop
   ctx.fillStyle = '#E5E8E3';
   ctx.fillRect(0, 0, width, height);
 
-  // Subtle wall drop shadow against studio wall
+  const tl = worldToScreen({ x: 0, y: WALL_HEIGHT_CM }, tr);
+  const trPt = worldToScreen({ x: WALL_WIDTH_CM, y: WALL_HEIGHT_CM }, tr);
+  const br = worldToScreen({ x: WALL_WIDTH_CM, y: 0 }, tr);
+  const bl = worldToScreen({ x: 0, y: 0 }, tr);
+
+  // Rear structural hydraulic Kilter frame & 3D angled wooden side cheeks!
+  drawWall3DStructure(ctx, tr, tl, trPt, br, bl, wallAngle);
+
+  // Subtle wall drop shadow against studio wall (grows dramatically deeper on overhang!)
+  const overhangRatio = clamp(wallAngle / 55, 0, 1);
+  const slabRatio = clamp(-wallAngle / 10, 0, 1);
   ctx.save();
-  ctx.shadowColor = 'rgba(20, 24, 30, 0.16)';
-  ctx.shadowBlur = 24;
-  ctx.shadowOffsetY = 8;
+  ctx.shadowColor = `rgba(20, 24, 30, ${0.16 + overhangRatio * 0.24})`;
+  ctx.shadowBlur = 22 + overhangRatio * 24;
+  ctx.shadowOffsetY = 8 + overhangRatio * 18;
   ctx.fillStyle = '#D5BF9B';
-  ctx.fillRect(tr.wallLeft, tr.wallTop, tr.wallPixelW, tr.wallPixelH);
+  ctx.beginPath();
+  ctx.moveTo(tl.x, tl.y);
+  ctx.lineTo(trPt.x, trPt.y);
+  ctx.lineTo(br.x, br.y);
+  ctx.lineTo(bl.x, bl.y);
+  ctx.closePath();
+  ctx.fill();
   ctx.restore();
 
-  // Clip inside wall panels
+  // Clip inside tilted wall trapezoid
   ctx.save();
   ctx.beginPath();
-  ctx.rect(tr.wallLeft, tr.wallTop, tr.wallPixelW, tr.wallPixelH);
+  ctx.moveTo(tl.x, tl.y);
+  ctx.lineTo(trPt.x, trPt.y);
+  ctx.lineTo(br.x, br.y);
+  ctx.lineTo(bl.x, bl.y);
+  ctx.closePath();
   ctx.clip();
 
-  // 1. Birch plywood geometric facets
+  // 1. Birch plywood geometric facets projected into 3D tilted plane
   for (const facet of WALL_FACETS) {
     ctx.beginPath();
     facet.pts.forEach(([nx, ny], idx) => {
-      const sx = tr.wallLeft + nx * tr.wallPixelW;
-      const sy = tr.wallTop + ny * tr.wallPixelH;
-      if (idx === 0) ctx.moveTo(sx, sy);
-      else ctx.lineTo(sx, sy);
+      const p = worldToScreen({ x: nx * WALL_WIDTH_CM, y: (1 - ny) * WALL_HEIGHT_CM }, tr);
+      if (idx === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
     });
     ctx.closePath();
     ctx.fillStyle = facet.fill;
@@ -209,26 +265,35 @@ export function renderScene(
     ctx.stroke();
   }
 
-  // Subtle top studio lighting gradient across wall (adapts to wall overhang/slab angle!)
-  const wallAngle = state.wallAngleDeg ?? 0;
-  const overhangRatio = clamp(wallAngle / 55, 0, 1);
-  const slabRatio = clamp(-wallAngle / 10, 0, 1);
-  const lightGrad = ctx.createLinearGradient(0, tr.wallTop, 0, tr.wallTop + tr.wallPixelH);
-  if (overhangRatio > 0.05) {
-    // Overhang casts dramatic underside shadow at top & deeper ambient shading
-    lightGrad.addColorStop(0, `rgba(22, 18, 14, ${0.12 + overhangRatio * 0.24})`);
-    lightGrad.addColorStop(0.45, `rgba(28, 22, 16, ${0.04 + overhangRatio * 0.1})`);
-    lightGrad.addColorStop(1, `rgba(255, 250, 238, ${0.06 + overhangRatio * 0.08})`);
+  // Dynamic studio lighting gradient across wall (adapts strongly to overhang/slab angle!)
+  const lightGrad = ctx.createLinearGradient(0, tr.wallTop, 0, tr.wallBottom);
+  if (overhangRatio > 0.04) {
+    // Steep overhang casts rich dark underside shading from above while catching warm bounce light below
+    lightGrad.addColorStop(0, `rgba(18, 16, 20, ${0.14 + overhangRatio * 0.3})`);
+    lightGrad.addColorStop(0.5, `rgba(26, 20, 16, ${0.06 + overhangRatio * 0.16})`);
+    lightGrad.addColorStop(1, `rgba(255, 248, 234, ${0.04 + overhangRatio * 0.08})`);
   } else {
-    lightGrad.addColorStop(0, `rgba(255, 252, 244, ${0.16 + slabRatio * 0.16})`);
-    lightGrad.addColorStop(0.65, 'rgba(255, 255, 255, 0)');
+    // Vertical / Slab catches bright skylight across the upper wall face
+    lightGrad.addColorStop(0, `rgba(255, 253, 246, ${0.16 + slabRatio * 0.24})`);
+    lightGrad.addColorStop(0.6, `rgba(255, 255, 255, ${slabRatio * 0.08})`);
     lightGrad.addColorStop(1, 'rgba(42, 32, 20, 0.14)');
   }
   ctx.fillStyle = lightGrad;
-  ctx.fillRect(tr.wallLeft, tr.wallTop, tr.wallPixelW, tr.wallPixelH);
+  ctx.fillRect(
+    Math.min(tl.x, bl.x) - 4,
+    tr.wallTop - 4,
+    Math.max(trPt.x, br.x) - Math.min(tl.x, bl.x) + 8,
+    tr.wallPixelH + 8
+  );
 
-  // 2. T-nut bolt grid (every 25cm)
-  ctx.fillStyle = 'rgba(84, 66, 44, 0.22)';
+  // Top roof lip highlight (for overhang) or receding bevel (for slab)
+  if (overhangRatio > 0.08) {
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.12 + overhangRatio * 0.16})`;
+    ctx.fillRect(tl.x, tl.y, trPt.x - tl.x, Math.max(2, 5 * overhangRatio));
+  }
+
+  // 2. T-nut bolt grid (every 25cm, naturally converges in 3D perspective!)
+  ctx.fillStyle = 'rgba(84, 66, 44, 0.24)';
   for (let wx = 25; wx < WALL_WIDTH_CM; wx += 25) {
     for (let wy = 25; wy < WALL_HEIGHT_CM; wy += 25) {
       const p = worldToScreen({ x: wx, y: wy }, tr);
@@ -257,7 +322,7 @@ export function renderScene(
     drawReachArc(ctx, tr, state);
   }
 
-  // 5. Beta path arrows (behind holds & climber slightly, or crisp overlay)
+  // 5. Beta path arrows
   if ((state.mode === 'plan' || state.mode === 'climb') && state.showBetaArrows && state.betaSteps.length > 0) {
     drawBetaArrows(ctx, tr, state);
   }
@@ -277,19 +342,22 @@ export function renderScene(
 
   ctx.restore();
 
-  // Wall outer architectural frame
-  ctx.strokeStyle = '#9C8768';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(tr.wallLeft, tr.wallTop, tr.wallPixelW, tr.wallPixelH);
+  // Wall outer architectural trapezoid frame
+  ctx.strokeStyle = overhangRatio > 0.2 ? '#5A4A38' : '#9C8768';
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(tl.x, tl.y);
+  ctx.lineTo(trPt.x, trPt.y);
+  ctx.lineTo(br.x, br.y);
+  ctx.lineTo(bl.x, bl.y);
+  ctx.closePath();
+  ctx.stroke();
 
-  // Metric height ticks on left margin (1m, 2m, 3m, 4m)
+  // Metric height ticks along the tilted left wall edge (1m, 2m, 3m, 4m)
   drawHeightRuler(ctx, tr);
 
-  // Side-profile wall tilt inclinometer badge (Kilter-style visual tilt feedback)
-  drawWallAngleBadge(ctx, tr, state.wallAngleDeg ?? 0);
-
-  // 8. Crash pad mat at the bottom
-  drawCrashPad(ctx, tr);
+  // 8. Crash pad mat at the bottom (with real overhanging shadow cast onto pad!)
+  drawCrashPad(ctx, tr, bl, br, wallAngle);
 
   // 9. Climber (drawn after wall frame so limbs / falls onto crash pad overlap cleanly!)
   if (state.mode !== 'setter') {
@@ -299,7 +367,6 @@ export function renderScene(
       drawClimber(ctx, tr, state.pose, state.profile, state.assignment, state.freeLimbs, state.strainLevel, state.lookTarget, state.timeSec);
     }
   } else {
-    // In setter mode, draw a subtle ghost climber silhouette at the left/bottom scale reference
     drawSetterScaleGhost(ctx, tr, state.profile);
   }
 
@@ -315,7 +382,119 @@ export function renderScene(
     ctx.restore();
   }
 
+  // 11. Prominent architectural side-profile wall cross-section diagram (always unobscured!)
+  drawWallSideProfileWidget(ctx, width, wallAngle);
+
   return tr;
+}
+
+/**
+ * Draws the 3D wooden side cheeks, rear vertical truss, and hydraulic tilt struts
+ * behind the tilted Kilter climbing wall so overhang/slab angles read unmistakably!
+ */
+function drawWall3DStructure(
+  ctx: CanvasRenderingContext2D,
+  tr: WallTransform,
+  tl: Vec2,
+  trPt: Vec2,
+  br: Vec2,
+  bl: Vec2,
+  wallAngleDeg: number
+): void {
+  const rad = (clamp(wallAngleDeg, -10, 55) * Math.PI) / 180;
+  const sinA = Math.sin(rad);
+  if (Math.abs(sinA) < 0.02) return;
+
+  ctx.save();
+  const frameInset = Math.abs(sinA) * tr.wallPixelW * 0.08 + 6;
+
+  if (sinA > 0) {
+    // OVERHANG: wall looms forward above the floor; draw rear A-frame steel legs & overhanging timber cap!
+    const sideDepthTop = 5 + sinA * 12;
+
+    // Rear freestanding steel A-frame support legs tucked cleanly inside the overhang silhouette
+    const rearLegXLeft = bl.x - 4 - sinA * 10;
+    const rearLegXRight = br.x + 4 + sinA * 10;
+    const rearMidY = tr.wallBottom - tr.wallPixelH * 0.42;
+
+    // Subtle dark void shadow directly behind the lower recessed base of the wall
+    ctx.fillStyle = `rgba(30, 36, 44, ${0.12 + sinA * 0.16})`;
+    ctx.beginPath();
+    ctx.moveTo(tl.x + 12, tl.y + 10);
+    ctx.lineTo(trPt.x - 12, trPt.y + 10);
+    ctx.lineTo(rearLegXRight, tr.wallBottom);
+    ctx.lineTo(rearLegXLeft, tr.wallBottom);
+    ctx.closePath();
+    ctx.fill();
+
+    // Steel hydraulic support legs visible along the lower-left and lower-right flanks
+    ctx.strokeStyle = '#525C68';
+    ctx.lineWidth = Math.max(2.6, 3.4 * tr.scale);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    // Left steel support strut
+    ctx.moveTo(rearLegXLeft, tr.wallBottom - 2);
+    ctx.lineTo(lerp(bl.x, tl.x, 0.52), rearMidY);
+    // Right steel support strut
+    ctx.moveTo(rearLegXRight, tr.wallBottom - 2);
+    ctx.lineTo(lerp(br.x, trPt.x, 0.52), rearMidY);
+    ctx.stroke();
+
+    // Left & right thick angled timber flanks
+    ctx.fillStyle = '#7A6347';
+    ctx.beginPath();
+    ctx.moveTo(tl.x, tl.y);
+    ctx.lineTo(tl.x - sideDepthTop * 0.35, tl.y + 4);
+    ctx.lineTo(bl.x - 2, bl.y);
+    ctx.lineTo(bl.x, bl.y);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#6A543B';
+    ctx.beginPath();
+    ctx.moveTo(trPt.x, trPt.y);
+    ctx.lineTo(trPt.x + sideDepthTop * 0.35, trPt.y + 4);
+    ctx.lineTo(br.x + 2, br.y);
+    ctx.lineTo(br.x, br.y);
+    ctx.closePath();
+    ctx.fill();
+
+    // Top extruded roof header beam (thick dark timber cap above the looming edge)
+    const capH = 4 + sinA * 10;
+    ctx.fillStyle = '#7E684C';
+    ctx.beginPath();
+    ctx.moveTo(tl.x, tl.y);
+    ctx.lineTo(trPt.x, trPt.y);
+    ctx.lineTo(trPt.x - frameInset * 0.25, trPt.y - capH);
+    ctx.lineTo(tl.x + frameInset * 0.25, tl.y - capH);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(24, 29, 34, 0.32)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  } else {
+    // SLAB (-10°..-5°): wall leans gently backward; show bright bevel cheeks receding away!
+    const sAbs = Math.abs(sinA);
+    const sideW = 6 + sAbs * 22;
+    ctx.fillStyle = '#B8A07E';
+    ctx.beginPath();
+    ctx.moveTo(tl.x, tl.y);
+    ctx.lineTo(tl.x - sideW * 0.45, tl.y + 6);
+    ctx.lineTo(bl.x - sideW * 0.2, bl.y);
+    ctx.lineTo(bl.x, bl.y);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = '#A8906E';
+    ctx.beginPath();
+    ctx.moveTo(trPt.x, trPt.y);
+    ctx.lineTo(trPt.x + sideW * 0.45, trPt.y + 6);
+    ctx.lineTo(br.x + sideW * 0.2, br.y);
+    ctx.lineTo(br.x, br.y);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function drawHeightRuler(ctx: CanvasRenderingContext2D, tr: WallTransform): void {
@@ -330,73 +509,143 @@ function drawHeightRuler(ctx: CanvasRenderingContext2D, tr: WallTransform): void
     ctx.strokeStyle = 'rgba(106, 115, 125, 0.45)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(tr.wallLeft - 6, p.y);
-    ctx.lineTo(tr.wallLeft, p.y);
+    ctx.moveTo(p.x - 6, p.y);
+    ctx.lineTo(p.x, p.y);
     ctx.stroke();
-    ctx.fillText(`${m}m`, tr.wallLeft - 9, p.y);
+    ctx.fillText(`${m}m`, p.x - 9, p.y);
   }
   ctx.restore();
 }
 
-function drawWallAngleBadge(ctx: CanvasRenderingContext2D, tr: WallTransform, angleDeg: number): void {
-  const bx = tr.wallLeft + 8;
-  const by = tr.wallTop + 8;
-  const bw = 96;
-  const bh = 28;
+function drawWallSideProfileWidget(
+  ctx: CanvasRenderingContext2D,
+  canvasW: number,
+  angleDeg: number
+): void {
+  const isCompact = canvasW <= 680;
+  const bx = isCompact ? 10 : 14;
+  const by = isCompact ? 10 : 14;
+  const bw = isCompact ? 82 : 94;
+  const bh = isCompact ? 78 : 88;
   const rad = (clamp(angleDeg, -10, 55) * Math.PI) / 180;
+  const isOverhang = angleDeg >= 10;
+  const isSteep = angleDeg >= 35;
+  const isSlab = angleDeg < 0;
 
   ctx.save();
-  ctx.fillStyle = 'rgba(24, 29, 34, 0.78)';
+  ctx.fillStyle = 'rgba(24, 29, 34, 0.84)';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.16)';
+  ctx.shadowBlur = 10;
+  ctx.shadowOffsetY = 3;
   ctx.beginPath();
-  ctx.roundRect(bx, by, bw, bh, 6);
+  ctx.roundRect(bx, by, bw, bh, 9);
   ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.strokeStyle = isSteep
+    ? 'rgba(249, 115, 22, 0.55)'
+    : isSlab
+      ? 'rgba(56, 189, 248, 0.5)'
+      : 'rgba(255, 255, 255, 0.14)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
 
-  // Mini side-profile wall inclinometer icon
-  const ox = bx + 14;
-  const oy = by + 22;
-  const len = 15;
-  // Vertical reference tick
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
+  // Header label
+  ctx.font = '700 9px "Space Grotesk", "PingFang SC", sans-serif';
+  ctx.fillStyle = 'rgba(247, 248, 245, 0.65)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('侧面倾角剖面', bx + bw / 2, by + 6);
+
+  // Side profile geometry
+  const ox = bx + (isCompact ? 26 : 30);
+  const oy = by + bh - 22;
+  const wallLen = isCompact ? 34 : 38;
+
+  // Crash pad floor bar
+  ctx.fillStyle = '#4B5563';
+  ctx.fillRect(bx + 10, oy, bw - 20, 4);
+
+  // 0° vertical dashed plumb line
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
   ctx.lineWidth = 1;
   ctx.setLineDash([2, 2]);
   ctx.beginPath();
   ctx.moveTo(ox, oy);
-  ctx.lineTo(ox, oy - len);
+  ctx.lineTo(ox, oy - wallLen - 2);
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // Actual tilted wall bar (overhang tilts right/forward over mat, slab tilts left)
-  const tx = ox + Math.sin(rad) * len;
-  const ty = oy - Math.cos(rad) * len;
-  ctx.strokeStyle = angleDeg >= 35 ? '#F97316' : angleDeg < 0 ? '#38BDF8' : '#F7F8F5';
-  ctx.lineWidth = 2.4;
+  // Filled angle wedge sector
+  if (Math.abs(angleDeg) >= 2) {
+    ctx.beginPath();
+    ctx.moveTo(ox, oy);
+    const startA = -Math.PI / 2;
+    const endA = -Math.PI / 2 + rad;
+    ctx.arc(ox, oy, 16, Math.min(startA, endA), Math.max(startA, endA));
+    ctx.closePath();
+    ctx.fillStyle = isSteep
+      ? 'rgba(249, 115, 22, 0.35)'
+      : isSlab
+        ? 'rgba(56, 189, 248, 0.35)'
+        : 'rgba(250, 204, 21, 0.28)';
+    ctx.fill();
+  }
+
+  // Tilted climbing wall slab (overhang leans right over mat, slab leans left)
+  const tx = ox + Math.sin(rad) * wallLen;
+  const ty = oy - Math.cos(rad) * wallLen;
+  ctx.strokeStyle = isSteep ? '#FB923C' : isSlab ? '#38BDF8' : isOverhang ? '#FACC15' : '#F7F8F5';
+  ctx.lineWidth = 3.2;
   ctx.lineCap = 'round';
   ctx.beginPath();
   ctx.moveTo(ox, oy);
   ctx.lineTo(tx, ty);
   ctx.stroke();
 
-  // Floor baseline
-  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-  ctx.lineWidth = 1.2;
+  // Mini side-view climber silhouette clinging to the front face of the wall!
+  const midX = ox + Math.sin(rad) * (wallLen * 0.56);
+  const midY = oy - Math.cos(rad) * (wallLen * 0.56);
+  // Outward normal from front face of wall (+x direction when vertical)
+  const nx = Math.cos(rad);
+  const ny = Math.sin(rad);
+  const bodyX = midX + nx * 6.5;
+  const bodyY = midY + ny * 6.5;
+  ctx.fillStyle = '#F7F8F5';
   ctx.beginPath();
-  ctx.moveTo(ox - 5, oy);
-  ctx.lineTo(ox + 12, oy);
+  ctx.arc(bodyX + Math.sin(rad) * 4, bodyY - Math.cos(rad) * 4, 2.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#F7F8F5';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  // Torso hanging vertically by gravity while hand reaches up to wall
+  ctx.moveTo(midX + Math.sin(rad) * 6, midY - Math.cos(rad) * 6);
+  ctx.lineTo(bodyX, bodyY);
+  ctx.lineTo(bodyX - 1.5, bodyY + 8);
+  ctx.lineTo(midX - Math.sin(rad) * 7, midY + Math.cos(rad) * 7);
   ctx.stroke();
 
-  ctx.font = '600 10px "JetBrains Mono", "PingFang SC", sans-serif';
-  ctx.fillStyle = '#F7F8F5';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(getWallAngleLabel(angleDeg), bx + 30, by + bh / 2 + 0.5);
+  // Angle text readout at bottom
+  ctx.font = '700 10.5px "JetBrains Mono", "PingFang SC", sans-serif';
+  ctx.fillStyle = isSteep ? '#FDBA74' : isSlab ? '#7DD3FC' : '#F7F8F5';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText(getWallAngleLabel(Math.round(angleDeg)), bx + bw / 2, by + bh - 4);
   ctx.restore();
 }
 
-function drawCrashPad(ctx: CanvasRenderingContext2D, tr: WallTransform): void {
-  const matTop = tr.wallTop + tr.wallPixelH;
-  const matLeft = tr.wallLeft - 14;
-  const matW = tr.wallPixelW + 28;
+function drawCrashPad(
+  ctx: CanvasRenderingContext2D,
+  tr: WallTransform,
+  bl: Vec2,
+  br: Vec2,
+  wallAngleDeg: number
+): void {
+  const matTop = tr.wallBottom;
+  const padSpan = Math.max(br.x - bl.x, tr.wallPixelW * 0.94);
+  const matLeft = tr.wallCenterX - padSpan / 2 - 14;
+  const matW = padSpan + 28;
   const matH = tr.padPixelH;
+  const overhangRatio = clamp(wallAngleDeg / 55, 0, 1);
 
   ctx.save();
   // Mat top bevel
@@ -410,6 +659,17 @@ function drawCrashPad(ctx: CanvasRenderingContext2D, tr: WallTransform): void {
   ctx.fillStyle = grad;
   ctx.fill();
 
+  // Overhanging wall casts a deep shadow across the crash pad beneath it!
+  if (overhangRatio > 0.04) {
+    const shGrad = ctx.createLinearGradient(0, matTop, 0, matTop + matH * (0.45 + overhangRatio * 0.55));
+    shGrad.addColorStop(0, `rgba(0, 0, 0, ${0.28 + overhangRatio * 0.42})`);
+    shGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = shGrad;
+    ctx.beginPath();
+    ctx.roundRect(matLeft, matTop, matW, matH, [6, 6, 8, 8]);
+    ctx.fill();
+  }
+
   // Mat stitching seam
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
   ctx.lineWidth = 1;
@@ -420,10 +680,14 @@ function drawCrashPad(ctx: CanvasRenderingContext2D, tr: WallTransform): void {
 
   // Subtle floor brand mark
   ctx.font = '600 10px "Space Grotesk", sans-serif';
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.34)';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('CRASH PAD · 4.0m × 4.5m BOULDERING WALL', tr.wallLeft + tr.wallPixelW / 2, matTop + matH * 0.56);
+  ctx.fillText(
+    `CRASH PAD · 4.0m × 4.5m · ${getWallAngleLabel(Math.round(wallAngleDeg))}`,
+    tr.wallCenterX,
+    matTop + matH * 0.56
+  );
   ctx.restore();
 }
 
@@ -448,8 +712,10 @@ function drawReachArc(ctx: CanvasRenderingContext2D, tr: WallTransform, state: R
     if (!env.canLaunch) return;
 
     const launchCenter = worldToScreen(env.launchOrigin, tr);
-    const rx = env.maxLatReach * tr.scale;
-    const ry = env.maxUpReach * tr.scale;
+    const launchU = clamp(env.launchOrigin.y / WALL_HEIGHT_CM, 0, 1);
+    const perspScale = tr.botScale + (tr.topScale - tr.botScale) * launchU;
+    const rx = env.maxLatReach * tr.scale * perspScale;
+    const ry = env.maxUpReach * (tr.wallPixelH / WALL_HEIGHT_CM);
 
     ctx.save();
     ctx.beginPath();
@@ -471,13 +737,17 @@ function drawReachArc(ctx: CanvasRenderingContext2D, tr: WallTransform, state: R
     : state.pose.hips[limb as 'lf' | 'rf'];
   const maxR = meta.isHand ? anatomy.maxArmReach : anatomy.maxLegReach;
 
+  const radY = tr.wallPixelH / WALL_HEIGHT_CM;
   const center = worldToScreen(root, tr);
-  const staticPx = maxR * 1.03 * tr.scale;
+  const rootU = clamp(root.y / WALL_HEIGHT_CM, 0, 1);
+  const perspScale = tr.botScale + (tr.topScale - tr.botScale) * rootU;
+  const staticPxX = maxR * 1.03 * tr.scale * perspScale;
+  const staticPxY = maxR * 1.03 * radY;
 
   ctx.save();
-  // Soft tinted reach disk
+  // Soft tinted reach disk (foreshortened cleanly with wall tilt)
   ctx.beginPath();
-  ctx.arc(center.x, center.y, staticPx, 0, Math.PI * 2);
+  ctx.ellipse(center.x, center.y, staticPxX, staticPxY, 0, 0, Math.PI * 2);
   ctx.fillStyle = `${meta.color}0E`;
   ctx.fill();
   ctx.strokeStyle = `${meta.color}70`;
@@ -487,9 +757,8 @@ function drawReachArc(ctx: CanvasRenderingContext2D, tr: WallTransform, state: R
 
   // Outer Dyno reach hint for hands
   if (meta.isHand) {
-    const dynoPx = maxR * 1.2 * tr.scale;
     ctx.beginPath();
-    ctx.arc(center.x, center.y, dynoPx, 0, Math.PI * 2);
+    ctx.ellipse(center.x, center.y, maxR * 1.2 * tr.scale * perspScale, maxR * 1.2 * radY, 0, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(217, 119, 6, 0.34)';
     ctx.lineWidth = 1.2;
     ctx.setLineDash([3, 6]);
@@ -500,10 +769,13 @@ function drawReachArc(ctx: CanvasRenderingContext2D, tr: WallTransform, state: R
 
 function drawHold(ctx: CanvasRenderingContext2D, tr: WallTransform, hold: Hold, state: RenderContextState): void {
   const pos = worldToScreen(hold, tr);
-  const r = getHoldHitRadius(hold) * tr.scale;
+  const u = hold.y / WALL_HEIGHT_CM;
+  const perspScale = tr.botScale + (tr.topScale - tr.botScale) * u;
+  const r = getHoldHitRadius(hold) * tr.scale * perspScale;
   const rad = (hold.angle * Math.PI) / 180;
   const isSelected = state.mode === 'setter' && state.selectedHoldId === hold.id;
   const isHovered = state.hoveredHoldId === hold.id;
+  const overhangRatio = clamp(tr.wallAngleDeg / 55, 0, 1);
 
   // Plan mode feasibility halo
   const previewEval = state.mode === 'plan' ? state.previewEvaluations.get(hold.id) : undefined;
@@ -535,11 +807,11 @@ function drawHold(ctx: CanvasRenderingContext2D, tr: WallTransform, hold: Hold, 
   ctx.translate(pos.x, pos.y);
   ctx.rotate(rad);
 
-  // Drop shadow on plywood
-  ctx.shadowColor = 'rgba(28, 20, 12, 0.36)';
-  ctx.shadowBlur = Math.max(4, r * 0.42);
-  ctx.shadowOffsetX = 2;
-  ctx.shadowOffsetY = 3.5;
+  // Drop shadow on plywood (deepens and extends downward on steep overhangs!)
+  ctx.shadowColor = `rgba(24, 18, 12, ${0.36 + overhangRatio * 0.24})`;
+  ctx.shadowBlur = Math.max(4, r * (0.42 + overhangRatio * 0.4));
+  ctx.shadowOffsetX = 2 + overhangRatio * 2;
+  ctx.shadowOffsetY = 3.5 + overhangRatio * 6.5;
 
   const baseFill = hold.color;
   const lightFill = shadeHex(baseFill, 34);
@@ -921,7 +1193,7 @@ function drawBetaArrows(ctx: CanvasRenderingContext2D, tr: WallTransform, state:
 
 function drawComPlumbLine(ctx: CanvasRenderingContext2D, tr: WallTransform, pose: SolvedPose): void {
   const com = worldToScreen(pose.com, tr);
-  const floorY = tr.wallTop + tr.wallPixelH;
+  const floorY = tr.wallBottom;
 
   ctx.save();
   ctx.strokeStyle = 'rgba(24, 29, 34, 0.34)';
@@ -1018,10 +1290,14 @@ function drawClimber(
   const lf = pt(pose.limbs.lf, assignment.lf === null);
   const rf = pt(pose.limbs.rf, assignment.rf === null);
 
-  // Subtle wall cast shadow
+  // Wall cast shadow (separates away from body on steep overhangs as gravity pulls torso off wall!)
+  const overhangRatio = clamp(tr.wallAngleDeg / 55, 0, 1);
+  const slabRatio = clamp(-tr.wallAngleDeg / 10, 0, 1);
+  const shadowOffX = 6.5 + overhangRatio * 10 - slabRatio * 2.5;
+  const shadowOffY = 7.5 + overhangRatio * 22 - slabRatio * 3.5;
   ctx.save();
-  ctx.translate(6.5, 7.5);
-  ctx.globalAlpha = 0.14;
+  ctx.translate(shadowOffX, shadowOffY);
+  ctx.globalAlpha = clamp(0.15 + overhangRatio * 0.14, 0.1, 0.32);
   const shadowColor = '#1E1A14';
   drawTaperedLimb(ctx, hipL, knL, 5.2 * s, 4.0 * s, shadowColor);
   drawTaperedLimb(ctx, knL, lf, 3.8 * s, 2.7 * s, shadowColor);

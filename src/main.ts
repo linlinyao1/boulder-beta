@@ -75,6 +75,11 @@ app.innerHTML = `
         <div id="ui-stage-top-dock" class="stage-top-dock"></div>
         <div class="canvas-container">
           <canvas id="wall-canvas"></canvas>
+          <div class="stage-tilt-stepper" title="快速调节墙面倾角（Kilter 模式）">
+            <button id="ui-tilt-minus" class="tilt-step-btn" aria-label="调缓倾角">−</button>
+            <span id="ui-tilt-val" class="tilt-step-val mono">0°</span>
+            <button id="ui-tilt-plus" class="tilt-step-btn" aria-label="调陡倾角">+</button>
+          </div>
           <button id="ui-zoom-reset" class="zoom-reset-pill hidden" title="点击复位缩放">1.0× 复位</button>
         </div>
         <div id="ui-stage-bottom-pill" class="stage-bottom-pill hidden"></div>
@@ -246,6 +251,9 @@ const mbWallAngle = document.querySelector<HTMLInputElement>('#mb-wall-angle')!;
 const uiAngleSub = document.querySelector<HTMLDivElement>('#ui-angle-sub')!;
 const mbAngleReadout = document.querySelector<HTMLSpanElement>('#mb-angle-readout')!;
 const uiLiveGradeBadge = document.querySelector<HTMLSpanElement>('#ui-live-grade-badge')!;
+const uiTiltMinus = document.querySelector<HTMLButtonElement>('#ui-tilt-minus')!;
+const uiTiltPlus = document.querySelector<HTMLButtonElement>('#ui-tilt-plus')!;
+const uiTiltVal = document.querySelector<HTMLSpanElement>('#ui-tilt-val')!;
 
 type MobileSheetMode = 'none' | 'body' | 'route' | 'panel';
 let mobileSheet: MobileSheetMode = 'none';
@@ -365,6 +373,14 @@ document.querySelectorAll<HTMLButtonElement>('[data-set-angle]').forEach((btn) =
     engine.setWallAngle(Number(btn.dataset.setAngle));
   });
 });
+uiTiltMinus.addEventListener('click', () => {
+  if (!latestSnap) return;
+  engine.setWallAngle(latestSnap.wallAngleDeg - 5);
+});
+uiTiltPlus.addEventListener('click', () => {
+  if (!latestSnap) return;
+  engine.setWallAngle(latestSnap.wallAngleDeg + 5);
+});
 
 // Body controls events
 bodyCollapseBtn.addEventListener('click', () => {
@@ -455,6 +471,9 @@ function syncUI(snap: EngineSnapshot): void {
   mbAngleReadout.textContent = `${angleLabel} (${snap.routeGrade})`;
   uiLiveGradeBadge.textContent = snap.routeGrade;
   uiLiveGradeBadge.style.background = gradeColor;
+  uiTiltVal.textContent = `${snap.wallAngleDeg}°`;
+  uiTiltMinus.disabled = snap.wallAngleDeg <= -10;
+  uiTiltPlus.disabled = snap.wallAngleDeg >= 55;
   document.querySelectorAll<HTMLButtonElement>('[data-set-angle]').forEach((btn) => {
     btn.classList.toggle('active', Number(btn.dataset.setAngle) === snap.wallAngleDeg);
   });
