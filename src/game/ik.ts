@@ -392,6 +392,33 @@ export function solvePose(
     }
   }
 
+  // Spread matched hands or matched feet slightly apart horizontally on shared holds
+  // so matched start stances and double-foot matches look crisp and athletic instead of overlapping.
+  if (
+    assignment.lh &&
+    assignment.lh === assignment.rh &&
+    !(overrideLimbPos && (overrideLimbPos.lh || overrideLimbPos.rh))
+  ) {
+    const h = holdMap.get(assignment.lh);
+    if (h) {
+      const spread = clamp((h.type === 'volume' ? 14 : h.type === 'sloper' || h.type === 'jug' ? 10 : 7) * h.scale * 0.6, 4.5, 11);
+      anchored.lh = { x: h.x - spread, y: h.y };
+      anchored.rh = { x: h.x + spread, y: h.y };
+    }
+  }
+  if (
+    assignment.lf &&
+    assignment.lf === assignment.rf &&
+    !(overrideLimbPos && (overrideLimbPos.lf || overrideLimbPos.rf))
+  ) {
+    const h = holdMap.get(assignment.lf);
+    if (h) {
+      const spread = clamp((h.type === 'volume' ? 16 : h.type === 'sloper' || h.type === 'jug' ? 11 : 8) * h.scale * 0.65, 5.5, 13.5);
+      anchored.lf = { x: h.x - spread, y: h.y };
+      anchored.rf = { x: h.x + spread, y: h.y };
+    }
+  }
+
   const hands: Vec2[] = [];
   if (anchored.lh) hands.push(anchored.lh);
   if (anchored.rh) hands.push(anchored.rh);

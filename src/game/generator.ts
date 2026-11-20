@@ -733,7 +733,7 @@ export function generateRoute(
       );
     }
 
-    // Starting footholds
+    // Starting footholds (4-point start)
     const startFootY = g >= 6 ? rand(30, 44) : rand(40, 58);
     placeHoldWithoutOverlap(
       holds,
@@ -743,7 +743,7 @@ export function generateRoute(
         x: clamp(startX - rand(30, 52), 42, WALL_WIDTH_CM - 42),
         y: startFootY,
         type: 'foothold',
-        role: 'normal',
+        role: 'startFoot',
         angle: 0,
         scale: clamp(bp.scaleBase * 0.96, 0.8, 1.18),
         color,
@@ -759,7 +759,7 @@ export function generateRoute(
         x: clamp(startX + rand(30, 52), 42, WALL_WIDTH_CM - 42),
         y: startFootY + rand(2, 14),
         type: 'foothold',
-        role: 'normal',
+        role: 'startFoot',
         angle: 0,
         scale: clamp(bp.scaleBase * 0.96, 0.8, 1.18),
         color,

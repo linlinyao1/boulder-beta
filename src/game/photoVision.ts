@@ -1082,6 +1082,40 @@ function assignStartAndTopRoles(holds: Hold[]): Hold[] {
     if (secondStart) {
       holds[secondStart.i].role = 'start';
     }
+
+    // Auto-assign realistic starting foothold(s) directly beneath the start hands
+    const startHandsList = holds.filter((h) => h.role === 'start');
+    const handCenterX =
+      startHandsList.reduce((s, h) => s + h.x, 0) / startHandsList.length;
+    const handMinY = Math.min(...startHandsList.map((h) => h.y));
+    const footCandidates = holds
+      .map((h, i) => ({ h, i }))
+      .filter(
+        ({ h }) =>
+          h.role === 'normal' &&
+          h.y < handMinY - 26 &&
+          handMinY - h.y <= 175 &&
+          Math.abs(h.x - handCenterX) <= 84
+      )
+      .sort((a, b) => {
+        const sA = Math.abs(a.h.x - handCenterX) * 0.85 + Math.abs(handMinY - a.h.y - 108);
+        const sB = Math.abs(b.h.x - handCenterX) * 0.85 + Math.abs(handMinY - b.h.y - 108);
+        return sA - sB;
+      });
+
+    if (footCandidates.length > 0) {
+      const firstFoot = footCandidates[0];
+      holds[firstFoot.i].role = 'startFoot';
+      const secondFoot = footCandidates.slice(1).find(
+        ({ h }) =>
+          Math.abs(h.x - firstFoot.h.x) >= 24 &&
+          Math.abs(h.x - firstFoot.h.x) <= 95 &&
+          Math.abs(h.y - firstFoot.h.y) <= 45
+      );
+      if (secondFoot) {
+        holds[secondFoot.i].role = 'startFoot';
+      }
+    }
   }
 
   return holds;

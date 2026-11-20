@@ -9,7 +9,7 @@ import {
 } from './generator';
 import { getHoldHitRadius } from './holds';
 import { Hold } from './types';
-import { blendPosesRigid, dist, doLegsIntersect } from './ik';
+import { blendPosesRigid, dist, doLegsIntersect, solvePose } from './ik';
 import {
   evaluateBetaSequence,
   evaluateHoldMove,
@@ -428,5 +428,55 @@ describe('Bouldering physics, V1–V11 grades & Kilter wall angle', () => {
     const evPBad = evaluateMove(startAssign, emptyFreeMap(), 'rh', holdTarget('p1'), [...baseHolds, offAxisPocket], std, 15);
     expect(evPGood.feasible).toBe(true);
     expect(evPBad.feasible).toBe(false);
+  });
+
+  it('supports explicit 4-point start (start + startFoot), avoids wide-split auto feet, and spreads matched start limbs', () => {
+    const std = CLIMBER_PRESETS[1];
+    const anatomy = computeAnatomy(std);
+
+    // 1. Explicit startFoot holds override auto-selection
+    const fourPointHolds: Hold[] = [
+      { id: 'f-left', label: 1, x: 115, y: 46, type: 'foothold', role: 'startFoot', angle: 0, scale: 1.0, color: '#2B6CB0' },
+      { id: 'f-mid', label: 2, x: 185, y: 55, type: 'foothold', role: 'normal', angle: 0, scale: 1.0, color: '#2B6CB0' },
+      { id: 'f-right', label: 3, x: 245, y: 50, type: 'foothold', role: 'startFoot', angle: 0, scale: 1.0, color: '#2B6CB0' },
+      { id: 'h-start', label: 4, x: 180, y: 145, type: 'jug', role: 'start', angle: 0, scale: 1.2, color: '#2B6CB0' },
+      { id: 'h-top', label: 5, x: 180, y: 360, type: 'jug', role: 'top', angle: 0, scale: 1.2, color: '#2B6CB0' },
+    ];
+    const a4 = getInitialAssignment(fourPointHolds, std);
+    expect(a4.lh).toBe('h-start');
+    expect(a4.rh).toBe('h-start');
+    expect(a4.lf).toBe('f-left');
+    expect(a4.rf).toBe('f-right');
+
+    // 2. Left-start comp route with far-right macro: never stretches into a 135cm split; matches cleanly on c1
+    const leftStartComp: Hold[] = [
+      { id: 'c1', label: 1, x: 70, y: 55, type: 'volume', role: 'normal', angle: 0, scale: 1.45, color: '#7EBEB2' },
+      { id: 'c2', label: 2, x: 202, y: 58, type: 'volume', role: 'normal', angle: 0, scale: 1.45, color: '#7EBEB2' },
+      { id: 'c6', label: 3, x: 68, y: 205, type: 'sloper', role: 'start', angle: -10, scale: 1.45, color: '#7EBEB2' },
+      { id: 'c10', label: 4, x: 220, y: 400, type: 'volume', role: 'top', angle: 0, scale: 1.45, color: '#7EBEB2' },
+    ];
+    const aComp = getInitialAssignment(leftStartComp, std);
+    expect(aComp.lh).toBe('c6');
+    expect(aComp.rh).toBe('c6');
+    expect(aComp.lf).toBe('c1');
+    expect(aComp.rf).toBe('c1');
+
+    // Matched hands & matched feet spread horizontally in IK instead of stacking on exact same point
+    const holdMap = new Map(leftStartComp.map((h) => [h.id, h]));
+    const startPose = solvePose(aComp, holdMap, anatomy, std.flexibility);
+    expect(startPose.limbs.rh.x - startPose.limbs.lh.x).toBeGreaterThan(8);
+    expect(startPose.limbs.rf.x - startPose.limbs.lf.x).toBeGreaterThan(10);
+
+    // 3. If user marks both a high hand hold and a low foothold as 'start' (dy > 95cm), separate hands vs feet cleanly
+    const legacyDoubleStart: Hold[] = [
+      { id: 'low-foot', label: 1, x: 160, y: 48, type: 'volume', role: 'start', angle: 0, scale: 1.2, color: '#D6453A' },
+      { id: 'high-hand', label: 2, x: 170, y: 178, type: 'jug', role: 'start', angle: 0, scale: 1.15, color: '#D6453A' },
+      { id: 'top-hold', label: 3, x: 190, y: 370, type: 'jug', role: 'top', angle: 0, scale: 1.2, color: '#D6453A' },
+    ];
+    const aSplit = getInitialAssignment(legacyDoubleStart, std);
+    expect(aSplit.lh).toBe('high-hand');
+    expect(aSplit.rh).toBe('high-hand');
+    expect(aSplit.lf).toBe('low-foot');
+    expect(aSplit.rf).toBe('low-foot');
   });
 });

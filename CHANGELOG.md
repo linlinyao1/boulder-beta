@@ -2,6 +2,15 @@
 
 All notable changes to **BETA 抱石台 (`boulder-beta`)** follow [Semantic Versioning](https://semver.org/).
 
+## [v1.5.4] - 2026-11-20
+### Added & Fixed
+- **4-Point Start (`startFoot` / 脚起步) Support (`src/game/types.ts`, `src/game/renderer.ts`, `src/main.ts`, `src/game/engine.ts`)**:
+  - Added dedicated `'startFoot'` hold role alongside `'start'` (手起步) and `'top'` (完攀点) across desktop Setter controls, mobile Setter quick-cycle button, double-click cycling, and wall/photo-preview tape badges (`手S` emerald green vs `脚S` cobalt blue).
+  - Marked starting footholds as `'startFoot'` in built-in presets (`src/game/presets.ts`), procedural route generation (`src/game/generator.ts`), and photo-to-route recognition (`src/game/photoVision.ts`).
+- **Natural Starting Stance & Matched-Limb IK (`src/game/physics.ts`, `src/game/ik.ts`)**:
+  - Upgraded `getInitialAssignment` to prioritize explicit `startFoot` holds, cap automatic start-foot horizontal reach (`<= maxLegReach * 1.02`, eliminating wide-split start poses on asymmetric comp routes), cleanly match both feet on a single under-hand macro, and gracefully separate vertically distant `start` holds (`dy > 95cm`) into hand vs foot starts.
+  - Added horizontal contact spread in `solvePose` whenever both hands or both feet match on the same hold so matched start stances render cleanly without overlapping limbs.
+
 ## [v1.5.3] - 2026-11-20
 ### Added & Fixed
 - **Lateral & Coordination Run-and-Jump Dyno Physics (`src/game/physics.ts`)**:

@@ -17,7 +17,7 @@ export type HoldStyleFamily = 'organic' | 'comp' | 'geometric';
 
 export type RouteStyle = 'balanced' | 'power' | 'tech' | 'dyno';
 
-export type HoldRole = 'start' | 'normal' | 'top';
+export type HoldRole = 'start' | 'startFoot' | 'normal' | 'top';
 
 export type LimbId = 'lh' | 'rh' | 'lf' | 'rf';
 

@@ -5,11 +5,21 @@ export interface ReleaseNote {
   highlights: string[];
 }
 
-export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.5.3';
+export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.5.4';
 export const GIT_COMMIT: string = typeof __GIT_COMMIT__ !== 'undefined' ? __GIT_COMMIT__ : 'dev';
 export const BUILD_TIME: string = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
 
 export const RELEASE_NOTES: ReleaseNote[] = [
+  {
+    version: '1.5.4',
+    date: '2026-11-20',
+    title: '四点起步支持（独立「脚起步」标定）与更自然的起步站姿 IK',
+    highlights: [
+      '定线器新增独立「脚起步 (脚S)」岩点属性（桌面端/移动端工具栏及双击切换均支持），岩壁与识图预览清晰区分绿色「手S」与蓝色「脚S」胶带标记',
+      '修复起步姿态怪异问题：为自动选脚增加真实水平步幅上限（不再向侧方 130cm 强行劈叉），单脚/单大造型起步时自然并脚站稳，双脚/双手同点匹配自动微调左右间距避免肢体重叠',
+      '所有预设线路、随机生成线路与拍照识图均自动标定起步脚点；即便误将低位脚点设为手起步，系统也会按高度差智能拆分手脚',
+    ],
+  },
   {
     version: '1.5.3',
     date: '2026-11-20',

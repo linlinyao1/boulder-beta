@@ -77,20 +77,39 @@ export function computeWallAnglePhysics(wallAngleDeg = 0): WallAnglePhysics {
  */
 export function getInitialAssignment(holds: Hold[], profile: ClimberProfile): LimbAssignment {
   const anatomy = computeAnatomy(profile);
-  const startHolds = holds.filter((h) => h.role === 'start').sort((a, b) => a.x - b.x);
+  const rawStartHolds = holds.filter((h) => h.role === 'start').sort((a, b) => a.x - b.x);
+  const explicitStartFeet = holds.filter((h) => h.role === 'startFoot').sort((a, b) => a.x - b.x);
+
+  // If the user marked both a high hand hold and a low foot hold as 'start' (dy > 95cm)
+  // without using 'startFoot', automatically separate the lower one(s) into starting feet
+  // so hands never contort down to foot height.
+  let startHands = rawStartHolds;
+  let derivedStartFeet = explicitStartFeet;
+  if (explicitStartFeet.length === 0 && rawStartHolds.length >= 2) {
+    const maxY = Math.max(...rawStartHolds.map((h) => h.y));
+    const minY = Math.min(...rawStartHolds.map((h) => h.y));
+    if (maxY - minY > 95) {
+      const upper = rawStartHolds.filter((h) => maxY - h.y <= 70).sort((a, b) => a.x - b.x);
+      const lower = rawStartHolds.filter((h) => maxY - h.y > 85).sort((a, b) => a.x - b.x);
+      if (upper.length > 0 && lower.length > 0) {
+        startHands = upper;
+        derivedStartFeet = lower;
+      }
+    }
+  }
 
   const assignment: LimbAssignment = { lh: null, rh: null, lf: null, rf: null };
 
-  if (startHolds.length >= 2) {
-    assignment.lh = startHolds[0].id;
-    assignment.rh = startHolds[startHolds.length - 1].id;
-  } else if (startHolds.length === 1) {
-    assignment.lh = startHolds[0].id;
-    assignment.rh = startHolds[0].id;
+  if (startHands.length >= 2) {
+    assignment.lh = startHands[0].id;
+    assignment.rh = startHands[startHands.length - 1].id;
+  } else if (startHands.length === 1) {
+    assignment.lh = startHands[0].id;
+    assignment.rh = startHands[0].id;
   } else if (holds.length > 0) {
     // Fallback to lowest non-foothold
     const handCandidates = holds
-      .filter((h) => h.type !== 'foothold')
+      .filter((h) => h.type !== 'foothold' && h.role !== 'startFoot')
       .sort((a, b) => a.y - b.y);
     const chosen = handCandidates[0] ?? holds[0];
     assignment.lh = chosen.id;
@@ -104,17 +123,53 @@ export function getInitialAssignment(holds: Hold[], profile: ClimberProfile): Li
     lhHold && rhHold ? (lhHold.x + rhHold.x) / 2 : lhHold?.x ?? rhHold?.x ?? 200;
   const handMinY = Math.min(lhHold?.y ?? 140, rhHold?.y ?? 140);
 
-  // Pick suitable starting footholds below the start hands
+  const isWideMacro = (h: Hold) =>
+    h.type === 'volume' || h.type === 'sloper' || h.type === 'jug' || h.scale >= 1.15;
+
+  // 1. Honor explicit Start-Foot holds first (4-point start)
+  const validExplicitFeet = derivedStartFeet.filter(
+    (h) => h.id !== assignment.lh && h.id !== assignment.rh
+  );
+  if (validExplicitFeet.length >= 2) {
+    assignment.lf = validExplicitFeet[0].id;
+    assignment.rf = validExplicitFeet[validExplicitFeet.length - 1].id;
+    return assignment;
+  }
+  if (validExplicitFeet.length === 1) {
+    const sf = validExplicitFeet[0];
+    if (isWideMacro(sf) || Math.abs(sf.x - handCenterX) <= 34) {
+      // Match both feet cleanly on the single designated foot start hold
+      assignment.lf = sf.id;
+      assignment.rf = sf.id;
+    } else if (sf.x <= handCenterX) {
+      assignment.lf = sf.id;
+    } else {
+      assignment.rf = sf.id;
+    }
+    return assignment;
+  }
+
+  // 2. Otherwise auto-pick realistic starting footholds within natural horizontal reach below start hands
+  const maxFootLat = anatomy.maxLegReach * 1.02;
+  const maxStanceWidth = anatomy.maxLegReach * 1.32;
   const footCandidates = holds
     .filter((h) => h.id !== assignment.lh && h.id !== assignment.rh && h.y < handMinY - 22)
-    .filter((h) => handMinY - h.y <= anatomy.heightCm * 0.96)
+    .filter(
+      (h) =>
+        handMinY - h.y <= anatomy.heightCm * 1.0 &&
+        Math.abs(h.x - handCenterX) <= maxFootLat
+    )
     .sort((a, b) => {
       const scoreA =
-        Math.abs(a.x - handCenterX) * 0.7 + Math.abs(handMinY - a.y - anatomy.heightCm * 0.62);
+        Math.abs(a.x - handCenterX) * 0.85 + Math.abs(handMinY - a.y - anatomy.heightCm * 0.62);
       const scoreB =
-        Math.abs(b.x - handCenterX) * 0.7 + Math.abs(handMinY - b.y - anatomy.heightCm * 0.62);
+        Math.abs(b.x - handCenterX) * 0.85 + Math.abs(handMinY - b.y - anatomy.heightCm * 0.62);
       return scoreA - scoreB;
     });
+
+  if (footCandidates.length === 0) {
+    return assignment;
+  }
 
   const leftFeet = footCandidates.filter((h) => h.x <= handCenterX + 12);
   const rightFeet = footCandidates.filter((h) => h.x >= handCenterX - 12);
@@ -122,21 +177,42 @@ export function getInitialAssignment(holds: Hold[], profile: ClimberProfile): Li
   if (leftFeet.length > 0) assignment.lf = leftFeet[0].id;
   if (rightFeet.length > 0) {
     const lfHold = assignment.lf ? holdMap.get(assignment.lf) : undefined;
-    const validRight = rightFeet.filter((h) => !lfHold || h.x >= lfHold.x - 4);
+    const validRight = rightFeet.filter(
+      (h) => !lfHold || (h.x >= lfHold.x - 4 && h.x - lfHold.x <= maxStanceWidth)
+    );
     const rfChoice =
       validRight.find((h) => h.id !== assignment.lf) ?? validRight[0] ?? null;
     assignment.rf = rfChoice?.id ?? null;
   }
   if (!assignment.lf && footCandidates.length > 0) {
     const rfHold = assignment.rf ? holdMap.get(assignment.rf) : undefined;
-    const validLeft = footCandidates.find((h) => !rfHold || h.x <= rfHold.x + 4);
+    const validLeft = footCandidates.find(
+      (h) => !rfHold || (h.x <= rfHold.x + 4 && rfHold.x - h.x <= maxStanceWidth)
+    );
     assignment.lf = validLeft?.id ?? null;
   }
   if (!assignment.rf && footCandidates.length > 1) {
     const lfHold = assignment.lf ? holdMap.get(assignment.lf) : undefined;
     assignment.rf =
-      footCandidates.find((h) => h.id !== assignment.lf && (!lfHold || h.x >= lfHold.x - 4))?.id ??
-      null;
+      footCandidates.find(
+        (h) =>
+          h.id !== assignment.lf &&
+          (!lfHold || (h.x >= lfHold.x - 4 && h.x - lfHold.x <= maxStanceWidth))
+      )?.id ?? null;
+  }
+
+  // If only one foot was assigned and it sits cleanly beneath the start hands (or is a big macro),
+  // match both feet on it for a solid athletic start instead of hanging awkwardly on one foot.
+  if (assignment.lf && !assignment.rf) {
+    const lfHold = holdMap.get(assignment.lf);
+    if (lfHold && (isWideMacro(lfHold) || Math.abs(lfHold.x - handCenterX) <= 30)) {
+      assignment.rf = assignment.lf;
+    }
+  } else if (assignment.rf && !assignment.lf) {
+    const rfHold = holdMap.get(assignment.rf);
+    if (rfHold && (isWideMacro(rfHold) || Math.abs(rfHold.x - handCenterX) <= 30)) {
+      assignment.lf = assignment.rf;
+    }
   }
 
   return assignment;

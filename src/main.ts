@@ -690,7 +690,13 @@ function renderMobilePad(snap: EngineSnapshot): void {
           拍照识图
         </button>
         <button class="btn btn-sm" id="mp-role">${
-          activeRole === 'start' ? '起步' : activeRole === 'top' ? '完攀' : '普通'
+          activeRole === 'start'
+            ? '手起步'
+            : activeRole === 'startFoot'
+              ? '脚起步'
+              : activeRole === 'top'
+                ? '完攀'
+                : '普通'
         }</button>
         ${
           selected
@@ -717,7 +723,13 @@ function renderMobilePad(snap: EngineSnapshot): void {
     });
     mobilePad.querySelector('#mp-role')?.addEventListener('click', () => {
       const nextRole: HoldRole =
-        activeRole === 'normal' ? 'start' : activeRole === 'start' ? 'top' : 'normal';
+        activeRole === 'normal'
+          ? 'start'
+          : activeRole === 'start'
+            ? 'startFoot'
+            : activeRole === 'startFoot'
+              ? 'top'
+              : 'normal';
       if (selected) engine.updateSelectedHold({ role: nextRole });
       else engine.setBrush({ role: nextRole });
     });
@@ -1003,6 +1015,7 @@ function renderSetterPanel(snap: EngineSnapshot): void {
     : null;
 
   const startCount = snap.holds.filter((h) => h.role === 'start').length;
+  const startFootCount = snap.holds.filter((h) => h.role === 'startFoot').length;
   const topCount = snap.holds.filter((h) => h.role === 'top').length;
 
   const activeType = selected ? selected.type : snap.brush.type;
@@ -1042,7 +1055,7 @@ function renderSetterPanel(snap: EngineSnapshot): void {
     <div class="section-head">
       <div>
         <div class="section-title">${selected ? `编辑岩点 #${selected.label}` : '放置新岩点画笔'}</div>
-        <div class="section-sub">共 ${snap.holds.length} 点 · 起步 ${startCount} · 完攀 ${topCount}</div>
+        <div class="section-sub">共 ${snap.holds.length} 点 · 手起 ${startCount} · 脚起 ${startFootCount} · 完攀 ${topCount}</div>
       </div>
       ${selected ? `<button id="st-deselect" class="btn btn-sm">切回画笔</button>` : ''}
     </div>
@@ -1094,12 +1107,13 @@ function renderSetterPanel(snap: EngineSnapshot): void {
         : ''
     }
 
-    <div class="section-sub" style="margin-bottom:6px;">岩点属性</div>
+    <div class="section-sub" style="margin-bottom:6px;">岩点属性（支持四点起步：手起步 + 脚起步）</div>
     <div class="role-row">
       ${(
         [
           ['normal', '普通点'],
-          ['start', '起步点 (Start)'],
+          ['start', '手起步 (手S)'],
+          ['startFoot', '脚起步 (脚S)'],
           ['top', '完攀点 (TOP)'],
         ] as [HoldRole, string][]
       )
@@ -1320,7 +1334,7 @@ function renderPlanPanel(snap: EngineSnapshot): void {
         <span class="beta-step-num" style="background:#535D68;">起</span>
         <div class="beta-item-main">
           <div class="beta-item-title">起步姿态 (Start)</div>
-          <div class="beta-item-sub">双手就位起步点 · 体能 100%</div>
+          <div class="beta-item-sub">手脚就位起步点 · 体能 100%</div>
         </div>
         <span></span>
       </div>

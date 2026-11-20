@@ -878,10 +878,18 @@ export class PhotoRouteModal {
             ? 'rgba(220, 38, 38, 0.22)'
             : hld.role === 'start'
               ? 'rgba(22, 163, 74, 0.24)'
-              : 'rgba(37, 99, 235, 0.18)';
+              : hld.role === 'startFoot'
+                ? 'rgba(2, 132, 199, 0.24)'
+                : 'rgba(100, 116, 139, 0.18)';
         ctx.fill();
         ctx.strokeStyle =
-          hld.role === 'top' ? '#EF4444' : hld.role === 'start' ? '#22C55E' : '#38BDF8';
+          hld.role === 'top'
+            ? '#EF4444'
+            : hld.role === 'start'
+              ? '#22C55E'
+              : hld.role === 'startFoot'
+                ? '#0EA5E9'
+                : '#94A3B8';
         ctx.lineWidth = 2.2;
         ctx.stroke();
 
@@ -890,8 +898,10 @@ export class PhotoRouteModal {
           hld.role === 'top'
             ? `TOP`
             : hld.role === 'start'
-              ? `S·${HOLD_SPECS[hld.type].shortZh}`
-              : `${hld.label}·${HOLD_SPECS[hld.type].shortZh}`;
+              ? `手S·${HOLD_SPECS[hld.type].shortZh}`
+              : hld.role === 'startFoot'
+                ? `脚S·${HOLD_SPECS[hld.type].shortZh}`
+                : `${hld.label}·${HOLD_SPECS[hld.type].shortZh}`;
         ctx.font = '700 10px "Inter", "PingFang SC", sans-serif';
         const tw = ctx.measureText(tag).width + 8;
         ctx.fillStyle =
@@ -899,7 +909,9 @@ export class PhotoRouteModal {
             ? '#DC2626'
             : hld.role === 'start'
               ? '#15803D'
-              : 'rgba(24, 29, 34, 0.85)';
+              : hld.role === 'startFoot'
+                ? '#0284C7'
+                : 'rgba(24, 29, 34, 0.85)';
         ctx.beginPath();
         ctx.roundRect(px - tw / 2, py - r - 15, tw, 14, 4);
         ctx.fill();

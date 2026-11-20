@@ -1863,7 +1863,13 @@ export class BoulderEngine {
       const hit = this.hitTestHold(wp);
       if (!hit) return;
       const nextRole: HoldRole =
-        hit.role === 'normal' ? 'start' : hit.role === 'start' ? 'top' : 'normal';
+        hit.role === 'normal'
+          ? 'start'
+          : hit.role === 'start'
+            ? 'startFoot'
+            : hit.role === 'startFoot'
+              ? 'top'
+              : 'normal';
       this.selectedHoldId = hit.id;
       this.updateSelectedHold({ role: nextRole });
     });

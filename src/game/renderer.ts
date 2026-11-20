@@ -816,9 +816,11 @@ function drawHold(ctx: CanvasRenderingContext2D, tr: WallTransform, hold: Hold, 
     ctx.restore();
   }
 
-  // Start / Top gym tape beneath hold
+  // Start (Hand / Foot) & Top gym tape beneath/above hold
   if (hold.role === 'start') {
     drawGymTape(ctx, pos, r, 'start');
+  } else if (hold.role === 'startFoot') {
+    drawGymTape(ctx, pos, r, 'startFoot');
   } else if (hold.role === 'top') {
     drawGymTape(ctx, pos, r, 'top');
   }
@@ -887,12 +889,17 @@ function drawHold(ctx: CanvasRenderingContext2D, tr: WallTransform, hold: Hold, 
   ctx.restore();
 }
 
-function drawGymTape(ctx: CanvasRenderingContext2D, pos: Vec2, r: number, role: 'start' | 'top'): void {
+function drawGymTape(
+  ctx: CanvasRenderingContext2D,
+  pos: Vec2,
+  r: number,
+  role: 'start' | 'startFoot' | 'top'
+): void {
   ctx.save();
   if (role === 'start') {
-    // Classic V-tape below start hold
+    // Classic V-tape below hand-start hold + subtle emerald "手S" tag
     ctx.strokeStyle = '#F7F8F5';
-    ctx.lineWidth = 4;
+    ctx.lineWidth = 4.2;
     ctx.lineCap = 'butt';
     ctx.beginPath();
     ctx.moveTo(pos.x - r * 0.9, pos.y + r * 0.95);
@@ -901,9 +908,48 @@ function drawGymTape(ctx: CanvasRenderingContext2D, pos: Vec2, r: number, role: 
     ctx.lineTo(pos.x + r * 0.2, pos.y + r * 0.5);
     ctx.stroke();
 
-    ctx.strokeStyle = '#181D22';
-    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = '#15803D';
+    ctx.lineWidth = 1.9;
     ctx.stroke();
+
+    const tagW = 28;
+    const tagH = 13;
+    const ty = pos.y + r + 8;
+    ctx.fillStyle = '#15803D';
+    ctx.beginPath();
+    ctx.roundRect(pos.x - tagW / 2, ty, tagW, tagH, 3);
+    ctx.fill();
+    ctx.font = '700 8px "Inter", "PingFang SC", sans-serif';
+    ctx.fillStyle = '#F7F8F5';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('手S', pos.x, ty + tagH / 2 + 0.5);
+  } else if (role === 'startFoot') {
+    // Crisp Cobalt-Blue foot-start tape + "脚S" badge below hold
+    ctx.strokeStyle = '#F7F8F5';
+    ctx.lineWidth = 4.2;
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    ctx.moveTo(pos.x - r * 0.85, pos.y + r * 0.88);
+    ctx.lineTo(pos.x + r * 0.85, pos.y + r * 0.88);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#0284C7';
+    ctx.lineWidth = 2.0;
+    ctx.stroke();
+
+    const tagW = 28;
+    const tagH = 13;
+    const ty = pos.y + r + 8;
+    ctx.fillStyle = '#0284C7';
+    ctx.beginPath();
+    ctx.roundRect(pos.x - tagW / 2, ty, tagW, tagH, 3);
+    ctx.fill();
+    ctx.font = '700 8px "Inter", "PingFang SC", sans-serif';
+    ctx.fillStyle = '#F7F8F5';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('脚S', pos.x, ty + tagH / 2 + 0.5);
   } else {
     // Top tape tag above top hold
     const tagW = 34;
