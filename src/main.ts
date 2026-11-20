@@ -13,6 +13,7 @@ import {
   LIMB_META,
 } from './game/holds';
 import { PRESET_ROUTES } from './game/presets';
+import { PhotoRouteModal } from './game/photoModal';
 import { HoldRole, HoldStyleFamily, HoldType, PlanContactMode } from './game/types';
 import { APP_VERSION, BUILD_TIME, GIT_COMMIT, RELEASE_NOTES } from './game/version';
 
@@ -275,6 +276,10 @@ const versionBtn = document.querySelector<HTMLButtonElement>('#ui-version-btn')!
 const mbVersionBtn = document.querySelector<HTMLButtonElement>('#mb-version-btn')!;
 const versionModal = document.querySelector<HTMLDivElement>('#ui-version-modal')!;
 const versionCloseBtn = document.querySelector<HTMLButtonElement>('#ui-version-close')!;
+
+const photoModal = new PhotoRouteModal(app, (payload) => {
+  engine.importPhotoRoute(payload);
+});
 
 const openVersionModal = (): void => {
   versionModal.classList.remove('hidden');
@@ -582,7 +587,7 @@ function syncUI(snap: EngineSnapshot): void {
     zoomResetBtn.classList.add('hidden');
   }
   const activeId = document.activeElement?.id;
-  if (activeId !== 'st-angle' && activeId !== 'st-scale') {
+  if (activeId !== 'st-angle' && activeId !== 'st-scale' && activeId !== 'st-photo-opacity') {
     renderModePanel(snap);
   }
 }
@@ -656,33 +661,39 @@ function renderMobilePad(snap: EngineSnapshot): void {
     const topCount = snap.holds.filter((h) => h.role === 'top').length;
 
     mobilePad.innerHTML = `
-      <div class="mp-row mp-grid-7">
+      <div class="mp-row mp-grid-4">
         ${(Object.keys(HOLD_SPECS) as HoldType[])
           .map((t) => {
             const shortLabel = HOLD_SPECS[t].shortZh
               .replace('大把手', '把手')
               .replace('大造型', '造型')
               .replace('微抠点', '微抠')
+              .replace('口袋点', '口袋')
               .replace('圆弧点', '圆弧');
             return `<button class="mp-btn ${activeType === t ? 'active' : ''}" data-mp-htype="${t}">${shortLabel}</button>`;
           })
           .join('')}
       </div>
       <div class="mp-row mp-actions">
+        <button class="btn btn-sm" id="mp-photo-import">拍照识图</button>
         <button class="btn btn-sm" id="mp-role">${
-          activeRole === 'start' ? '属性:起步' : activeRole === 'top' ? '属性:完攀' : '属性:普通'
+          activeRole === 'start' ? '起步' : activeRole === 'top' ? '完攀' : '普通'
         }</button>
         ${
           selected
             ? `<button class="btn btn-sm" id="mp-rot">旋转</button>
                <button class="btn btn-sm btn-danger" id="mp-del">删</button>`
-            : `<button class="btn btn-sm" id="mp-setter-more">颜色/角度</button>`
+            : `<button class="btn btn-sm" id="mp-setter-more">工艺/底图</button>`
         }
         <button class="btn btn-sm btn-primary" id="mp-go-plan" style="flex:1;" ${
           startCount === 0 || topCount === 0 ? 'disabled' : ''
         }>去规划 →</button>
       </div>
     `;
+
+    mobilePad.querySelector('#mp-photo-import')?.addEventListener('click', () => {
+      photoModal.open(snap.wallAngleDeg);
+    });
 
     mobilePad.querySelectorAll<HTMLButtonElement>('[data-mp-htype]').forEach((b) => {
       b.addEventListener('click', () => {
@@ -994,6 +1005,27 @@ function renderSetterPanel(snap: EngineSnapshot): void {
   const supportsSurfaceFeatures = activeType !== 'foothold' && activeType !== 'volume';
 
   modePanel.innerHTML = `
+    <div class="photo-setter-banner">
+      <button id="st-photo-import" class="btn btn-block btn-primary">拍照 / 上传岩壁照 · 智能生成线路</button>
+      ${
+        snap.hasWallPhotoOverlay
+          ? `<div class="photo-overlay-bar">
+              <div class="photo-overlay-top">
+                <label class="toggle-chip">
+                  <input id="st-photo-vis" type="checkbox" ${snap.wallPhotoVisible ? 'checked' : ''} />
+                  <span>原图底图</span>
+                </label>
+                <span class="mono" style="font-size:11px;color:var(--ink-secondary);">${Math.round(
+                  snap.wallPhotoOpacity * 100
+                )}%</span>
+                <button id="st-photo-clear" class="btn btn-sm" style="margin-left:auto;">清除底图</button>
+              </div>
+              <input id="st-photo-opacity" type="range" min="0.1" max="0.85" step="0.05" value="${snap.wallPhotoOpacity}" />
+            </div>`
+          : ''
+      }
+    </div>
+
     <div class="section-head">
       <div>
         <div class="section-title">${selected ? `编辑岩点 #${selected.label}` : '放置新岩点画笔'}</div>
@@ -1115,6 +1147,23 @@ function renderSetterPanel(snap: EngineSnapshot): void {
       </button>
     </div>
   `;
+
+  modePanel.querySelector('#st-photo-import')?.addEventListener('click', () => {
+    setMobileSheet('none');
+    photoModal.open(snap.wallAngleDeg);
+  });
+
+  modePanel.querySelector<HTMLInputElement>('#st-photo-vis')?.addEventListener('change', (e) => {
+    engine.setWallPhotoVisible((e.target as HTMLInputElement).checked);
+  });
+
+  modePanel.querySelector<HTMLInputElement>('#st-photo-opacity')?.addEventListener('input', (e) => {
+    engine.setWallPhotoOpacity(Number((e.target as HTMLInputElement).value));
+  });
+
+  modePanel.querySelector('#st-photo-clear')?.addEventListener('click', () => {
+    engine.clearWallPhotoOverlay();
+  });
 
   modePanel.querySelector('#st-deselect')?.addEventListener('click', () => {
     engine.deselectHold();

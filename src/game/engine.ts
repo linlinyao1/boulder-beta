@@ -112,6 +112,9 @@ export interface EngineSnapshot {
   playbackSpeed: number;
   climbResult: ClimbResult | null;
   cameraZoom: number;
+  hasWallPhotoOverlay: boolean;
+  wallPhotoVisible: boolean;
+  wallPhotoOpacity: number;
 }
 
 interface ClimbAnimState {
@@ -198,6 +201,7 @@ export class BoulderEngine {
   private draggingHoldId: string | null = null;
   private dragOffset: Vec2 = { x: 0, y: 0 };
   private dragMoved = false;
+  private wallPhotoOverlay: { image: HTMLCanvasElement; opacity: number; visible: boolean } | null = null;
   private brush: SetterBrush = {
     type: 'jug',
     role: 'normal',
@@ -384,6 +388,7 @@ export class BoulderEngine {
     this.holds = renumberHolds(route.holds.map((h) => ({ ...h })));
     this.brush.color = route.holdColor;
     this.selectedHoldId = null;
+    this.wallPhotoOverlay = null;
     this.betaSteps = [];
     this.inspectedStepIndex = -1;
     this.refreshLiveGrade();
@@ -434,11 +439,66 @@ export class BoulderEngine {
     this.routeDescription = '点击岩墙放置岩点，拖拽移动位置，可自由调整墙面倾角（-10° ~ 55°）。';
     this.holds = [];
     this.selectedHoldId = null;
+    this.wallPhotoOverlay = null;
     this.betaSteps = [];
     this.inspectedStepIndex = -1;
     this.mode = 'setter';
     this.refreshLiveGrade();
     this.recomputeBeta();
+    this.emit();
+  }
+
+  public importPhotoRoute(params: {
+    holds: Hold[];
+    wallAngleDeg: number;
+    estimatedGrade: string;
+    dominantHex: string;
+    overlayCanvas: HTMLCanvasElement;
+    description: string;
+  }): void {
+    this.stopClimbInternal();
+    this.cameraZoom = 1.0;
+    this.cameraPanX = 0;
+    this.cameraPanY = 0;
+    this.routeName = '实景拍照复刻线';
+    this.baseRouteGrade = 'Custom';
+    this.wallAngleDeg = clamp(Math.round(params.wallAngleDeg / 5) * 5, -10, 55);
+    this.renderedWallAngle = this.wallAngleDeg;
+    this.baseWallAngleDeg = this.wallAngleDeg;
+    this.routeStyle = 'balanced';
+    this.routeDescription = params.description;
+    this.holds = renumberHolds(params.holds.map((h) => ({ ...h })));
+    this.brush.color = params.dominantHex;
+    this.selectedHoldId = null;
+    this.betaSteps = [];
+    this.inspectedStepIndex = -1;
+    this.wallPhotoOverlay = {
+      image: params.overlayCanvas,
+      opacity: 0.56,
+      visible: true,
+    };
+    this.mode = 'setter';
+    this.refreshLiveGrade();
+    this.routeGrade = params.estimatedGrade !== 'Custom' ? params.estimatedGrade : this.liveGradeEstimate.gradeLabel;
+    this.recomputeBeta();
+    this.syncPlanPose(true);
+    this.emit();
+  }
+
+  public setWallPhotoVisible(visible: boolean): void {
+    if (!this.wallPhotoOverlay) return;
+    this.wallPhotoOverlay = { ...this.wallPhotoOverlay, visible };
+    this.emit();
+  }
+
+  public setWallPhotoOpacity(opacity: number): void {
+    if (!this.wallPhotoOverlay) return;
+    this.wallPhotoOverlay = { ...this.wallPhotoOverlay, opacity: clamp(opacity, 0, 0.9) };
+    this.emit();
+  }
+
+  public clearWallPhotoOverlay(): void {
+    this.wallPhotoOverlay = null;
     this.emit();
   }
 
@@ -1406,6 +1466,7 @@ export class BoulderEngine {
       freeLimbs: activeFree,
       selectedHoldId: this.selectedHoldId,
       hoveredHoldId: this.hoveredHoldId,
+      wallPhotoOverlay: this.wallPhotoOverlay,
       activeLimb: this.activeLimb,
       planContactMode: this.planContactMode,
       wallHoverPos: this.wallHoverPos,
@@ -1835,6 +1896,9 @@ export class BoulderEngine {
       playbackSpeed: this.playbackSpeed,
       climbResult: this.climbResult,
       cameraZoom: this.cameraZoom,
+      hasWallPhotoOverlay: Boolean(this.wallPhotoOverlay),
+      wallPhotoVisible: this.wallPhotoOverlay?.visible ?? false,
+      wallPhotoOpacity: this.wallPhotoOverlay?.opacity ?? 0.56,
     });
   }
 }

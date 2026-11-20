@@ -2,6 +2,15 @@
 
 All notable changes to **BETA 抱石台 (`boulder-beta`)** follow [Semantic Versioning](https://semver.org/).
 
+## [v1.5.0] - 2026-11-20
+### Added
+- **100% Local On-Device Photo-to-Route Setter (`src/game/photoVision.ts`, `src/game/photoModal.ts`)**:
+  - Upload or capture real gym wall photos (mobile `capture="environment"` camera + drag-and-drop + built-in realistic gym demo photo).
+  - Interactive 4-corner perspective rectification (`computeHomographyDstToSrc` & `warpRgbaPerspective`) mapping tilted gym photos cleanly into `400×450cm` orthographic wall coordinates.
+  - Chalk- & shadow-tolerant CIELAB contrastive color segmentation with positive multi-tap expansion, negative sample rejection, automatic wall background subtraction, and achromatic (black/white) route support.
+  - On-device geometric + photometric classifier (PCA major/minor axes, solidity, dark cavity pocket detection, specular Dual-Tex detection, luminance/chalk gradient pull orientation) + Physics-in-the-Loop route angle calibration & live V-grade estimate.
+- **3D Perspective-Mapped Wall Photo Underlay**: imported rectified gym photo projects onto the 3D tilted trapezoid plywood wall (tilting smoothly with Kilter angles `-10°..+55°`), with show/hide toggle, opacity slider, and clear controls in Setter mode.
+
 ## [v1.4.1] - 2026-11-20
 ### Fixed
 - Fixed climber awkwardly flying straight across the wall to the TOP hold after clicking **AI 推演 (`autoSuggestBeta`)**: the climber now stays grounded on the Start holds with full Beta path arrows displayed immediately, ready to step through or play the climb animation.

@@ -5,11 +5,22 @@ export interface ReleaseNote {
   highlights: string[];
 }
 
-export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.4.1';
+export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.5.0';
 export const GIT_COMMIT: string = typeof __GIT_COMMIT__ !== 'undefined' ? __GIT_COMMIT__ : 'dev';
 export const BUILD_TIME: string = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
 
 export const RELEASE_NOTES: ReleaseNote[] = [
+  {
+    version: '1.5.0',
+    date: '2026-11-20',
+    title: '实景拍照 / 上传照片端智能识图定线',
+    highlights: [
+      '定线模式新增「拍照 / 上传岩壁照智能生成线路」：100% 浏览器本地端智能运行，支持手机后置相机直拍与内置样张体验',
+      '内置 4 角单应性透视矫正（Homography）与抗镁粉/抗阴影 CIELAB 对比取色引擎，支持正样本增强与负样本排除杂色',
+      '端侧几何与光照特征分类器自动推断岩点类型（含口袋点/双纹理）、尺寸、发力朝向与 Start/TOP，并接入物理求解器闭环校准',
+      '导入定线台后自动保留 3D 透视贴合的半透明原图底图（支持开关与透明度调节），方便 1:1 对照微调',
+    ],
+  },
   {
     version: '1.4.1',
     date: '2026-11-20',

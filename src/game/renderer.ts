@@ -65,6 +65,7 @@ export interface RenderContextState {
   // Setter mode
   selectedHoldId: string | null;
   hoveredHoldId: string | null;
+  wallPhotoOverlay?: { image: HTMLCanvasElement; opacity: number; visible: boolean } | null;
   // Plan mode
   activeLimb: LimbId;
   planContactMode?: PlanContactMode;
@@ -293,6 +294,34 @@ export function renderScene(
       ctx.arc(p.x, p.y, Math.max(1.1, 1.35 * tr.scale), 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  // 2b. Optional perspective-rectified real gym wall photo underlay (projected onto the 3D tilted trapezoid!)
+  if (
+    state.wallPhotoOverlay &&
+    state.wallPhotoOverlay.visible &&
+    state.wallPhotoOverlay.opacity > 0.01
+  ) {
+    const img = state.wallPhotoOverlay.image;
+    const strips = 48;
+    const srcStripH = img.height / strips;
+    ctx.save();
+    ctx.globalAlpha = clamp(state.wallPhotoOverlay.opacity, 0, 0.92);
+    for (let i = 0; i < strips; i++) {
+      // i = 0 is top of photo (world y = WALL_HEIGHT_CM); i = strips is bottom (world y = 0)
+      const wyTop = WALL_HEIGHT_CM * (1 - i / strips);
+      const wyBot = WALL_HEIGHT_CM * (1 - (i + 1) / strips);
+      const pLTop = worldToScreen({ x: 0, y: wyTop }, tr);
+      const pRTop = worldToScreen({ x: WALL_WIDTH_CM, y: wyTop }, tr);
+      const pLBot = worldToScreen({ x: 0, y: wyBot }, tr);
+      const pRBot = worldToScreen({ x: WALL_WIDTH_CM, y: wyBot }, tr);
+      const dx = Math.min(pLTop.x, pLBot.x);
+      const dw = Math.max(pRTop.x, pRBot.x) - dx;
+      const dy = pLTop.y;
+      const dh = Math.max(1, pLBot.y - pLTop.y + 0.8);
+      ctx.drawImage(img, 0, i * srcStripH, img.width, srcStripH + 0.5, dx, dy, dw, dh);
+    }
+    ctx.restore();
   }
 
   // 3. Faint chalk smudges around holds
