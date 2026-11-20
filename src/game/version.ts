@@ -5,11 +5,21 @@ export interface ReleaseNote {
   highlights: string[];
 }
 
-export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.5.0';
+export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.5.1';
 export const GIT_COMMIT: string = typeof __GIT_COMMIT__ !== 'undefined' ? __GIT_COMMIT__ : 'dev';
 export const BUILD_TIME: string = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
 
 export const RELEASE_NOTES: ReleaseNote[] = [
+  {
+    version: '1.5.1',
+    date: '2026-11-20',
+    title: '移动端顶栏直达「识图」入口与 V5 随机定线稳定性修复',
+    highlights: [
+      '移动端顶部导航栏新增「识图」快捷相机按钮，任意模式下均可一键拉起拍照 / 上传识图定线，无需先切定线页',
+      '高亮优化移动端定线底部「拍照识图」按钮视觉辨识度',
+      '加固 V4–V6 随机线路生成的深度恢复策略，确保每次随机生成 100% 物理可解并通过 CI 稳定部署',
+    ],
+  },
   {
     version: '1.5.0',
     date: '2026-11-20',

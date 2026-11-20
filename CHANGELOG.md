@@ -2,6 +2,11 @@
 
 All notable changes to **BETA 抱石台 (`boulder-beta`)** follow [Semantic Versioning](https://semver.org/).
 
+## [v1.5.1] - 2026-11-20
+### Added & Fixed
+- **Mobile 1-Tap Photo Shortcut**: Added a dedicated camera button (`识图`) right in the mobile top bar so phone users can launch photo/camera route recognition immediately from any mode, plus accented styling on the mobile Setter `拍照识图` button.
+- **Deterministic V5 Procedural Generation**: Added deep-recovery pass in `generateRoute` for V4–V6 so procedural routes are reliably solvable across all random seeds and GitHub Pages CI builds pass consistently.
+
 ## [v1.5.0] - 2026-11-20
 ### Added
 - **100% Local On-Device Photo-to-Route Setter (`src/game/photoVision.ts`, `src/game/photoModal.ts`)**:

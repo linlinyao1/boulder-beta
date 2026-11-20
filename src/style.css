@@ -1801,4 +1801,21 @@ input[type='range'] {
   }
 }
 
+.btn-photo-pill,
+.btn-photo-accent {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: linear-gradient(135deg, #1b222d 0%, #2b384c 100%) !important;
+  color: #ffffff !important;
+  border-color: #1b222d !important;
+  font-weight: 700;
+}
+
+.btn-photo-pill svg,
+.btn-photo-accent svg {
+  flex-shrink: 0;
+}
+
 

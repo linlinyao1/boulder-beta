@@ -622,11 +622,12 @@ export function generateRoute(
   const anatomy = computeAnatomy(profile);
 
   const baseAttempts = g >= 7 ? 10 : g >= 4 ? 8 : 6;
-  const hardCapAttempts = 26;
+  const hardCapAttempts = 30;
   for (let attempt = 0; attempt < hardCapAttempts; attempt++) {
     // Stop once we have finished the normal sampling budget AND found at least one verified solvable route
     if (attempt >= baseAttempts && bestMetrics !== null) break;
     const isRecoveryPass = attempt >= baseAttempts;
+    const isDeepRecovery = attempt >= baseAttempts + 6;
     const holds: Hold[] = [];
     const trialAngle =
       attempt === 0
@@ -636,12 +637,18 @@ export function generateRoute(
           : pick(bp.wallAngles);
 
     // Style-tuned hold pool (strictly zero jugs on V4+ except explicit V4 dyno catch)
-    const styleHandPool: HoldType[] = isRecoveryPass
+    const styleHandPool: HoldType[] = isDeepRecovery
       ? g >= 8
-        ? ['crimp', 'pinch', 'microcrimp', 'crimp']
-        : g >= 5
-          ? ['pinch', 'crimp', 'pinch', 'sloper']
+        ? ['crimp', 'pinch', 'crimp', 'pinch']
+        : g >= 4
+          ? ['pinch', 'pinch', 'crimp', 'pinch']
           : bp.handPool
+      : isRecoveryPass
+        ? g >= 8
+          ? ['crimp', 'pinch', 'microcrimp', 'crimp']
+          : g >= 5
+            ? ['pinch', 'crimp', 'pinch', 'sloper']
+            : bp.handPool
       : style === 'tech'
         ? g >= 8
           ? ['sloper', 'crimp', 'microcrimp', 'sloper']
@@ -657,13 +664,13 @@ export function generateRoute(
           : bp.handPool;
 
     // Start zone
-    const startX = rand(110, 290);
-    const startY = g >= 6 ? rand(104, 124) : rand(118, 138);
-    const twoStarts = Math.random() < bp.twoStartsProb;
+    const startX = isDeepRecovery ? rand(140, 260) : rand(110, 290);
+    const startY = isDeepRecovery ? rand(128, 138) : g >= 6 ? rand(104, 124) : rand(118, 138);
+    const twoStarts = isDeepRecovery ? true : Math.random() < bp.twoStartsProb;
 
     if (twoStarts) {
       const gap = rand(52, 74);
-      const startTypeL = pick(bp.startPool);
+      const startTypeL: HoldType = isDeepRecovery ? (g <= 3 ? 'jug' : 'pinch') : pick(bp.startPool);
       placeHoldWithoutOverlap(
         holds,
         {
@@ -673,8 +680,8 @@ export function generateRoute(
           y: startY,
           type: startTypeL,
           role: 'start',
-          angle: g <= 1 ? 0 : Math.round(rand(-bp.maxAngle * 0.42, 6)),
-          scale: clamp(bp.scaleBase, 0.82, 1.24),
+          angle: g <= 1 || isDeepRecovery ? 0 : Math.round(rand(-bp.maxAngle * 0.42, 6)),
+          scale: clamp(bp.scaleBase + (isDeepRecovery ? 0.06 : 0), 0.82, 1.24),
           color,
           styleFamily: holdFamily,
           shapeVariant: pickVariantForFamily(startTypeL),
@@ -683,7 +690,7 @@ export function generateRoute(
         true,
         { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: 102, maxY: 155 }
       );
-      const startTypeR = pick(bp.startPool);
+      const startTypeR: HoldType = isDeepRecovery ? (g <= 3 ? 'jug' : 'pinch') : pick(bp.startPool);
       placeHoldWithoutOverlap(
         holds,
         {
@@ -693,8 +700,8 @@ export function generateRoute(
           y: startY + rand(-6, 10),
           type: startTypeR,
           role: 'start',
-          angle: g <= 1 ? 0 : Math.round(rand(-6, bp.maxAngle * 0.42)),
-          scale: clamp(bp.scaleBase, 0.82, 1.24),
+          angle: g <= 1 || isDeepRecovery ? 0 : Math.round(rand(-6, bp.maxAngle * 0.42)),
+          scale: clamp(bp.scaleBase + (isDeepRecovery ? 0.06 : 0), 0.82, 1.24),
           color,
           styleFamily: holdFamily,
           shapeVariant: pickVariantForFamily(startTypeR),
@@ -767,32 +774,40 @@ export function generateRoute(
     let dir = startX > WALL_WIDTH_CM / 2 ? -1 : 1;
     const firstCrux = Math.max(1, Math.floor(bp.numHands / 2) - (bp.cruxCount >= 2 ? 1 : 0));
 
-    for (let i = 0; i < bp.numHands; i++) {
+    const targetNumHands = isDeepRecovery && g >= 5 ? 3 : isDeepRecovery && g === 4 ? 4 : bp.numHands;
+    for (let i = 0; i < targetNumHands; i++) {
       const isCrux = bp.cruxCount > 0 && i >= firstCrux && i < firstCrux + bp.cruxCount;
-      const easeFactor = isRecoveryPass ? 0.86 : 1.0;
+      const easeFactor = isRecoveryPass ? 0.88 : 1.0;
       const dynoExtra = style === 'dyno' && isCrux && !isRecoveryPass ? 8 : 0;
-      const stepDy =
-        (rand(bp.minDy, bp.maxDy) + (isCrux ? bp.cruxBoostDy * (i === firstCrux ? 0.9 : 0.55) : 0)) *
-          easeFactor +
-        dynoExtra;
+      const stepDy = isDeepRecovery
+        ? rand(56, 66)
+        : (rand(bp.minDy, bp.maxDy) + (isCrux ? bp.cruxBoostDy * (i === firstCrux ? 0.9 : 0.55) : 0)) *
+            easeFactor +
+          dynoExtra;
       const targetY = clamp(prevY + stepDy, prevY + 34, 344);
 
       if (Math.random() < (g <= 1 ? 0.55 : 0.78)) dir *= -1;
-      let targetX = prevX + dir * rand(bp.minDx, bp.maxDx * easeFactor);
+      let targetX = isDeepRecovery
+        ? prevX + dir * rand(28, 48)
+        : prevX + dir * rand(bp.minDx, bp.maxDx * easeFactor);
       if (targetX < 56 || targetX > WALL_WIDTH_CM - 56) {
         dir *= -1;
-        targetX = clamp(prevX + dir * rand(bp.minDx, bp.maxDx * 0.85 * easeFactor), 56, WALL_WIDTH_CM - 56);
+        targetX = isDeepRecovery
+          ? clamp(prevX + dir * rand(24, 44), 64, WALL_WIDTH_CM - 64)
+          : clamp(prevX + dir * rand(bp.minDx, bp.maxDx * 0.85 * easeFactor), 56, WALL_WIDTH_CM - 56);
       }
 
       let type: HoldType = pick(styleHandPool);
       // Guarantee at least one iconic microcrimp crux on V8–V11 power/balanced lines!
-      if (isCrux && g >= 8 && style !== 'dyno' && i === firstCrux) {
+      if (isCrux && g >= 8 && style !== 'dyno' && i === firstCrux && !isDeepRecovery) {
         type = 'microcrimp';
       }
 
       let angle = 0;
       if (bp.maxAngle > 0) {
-        if (isRecoveryPass) {
+        if (isDeepRecovery) {
+          angle = Math.round(rand(-10, 10));
+        } else if (isRecoveryPass) {
           angle = Math.round(rand(-22, 22));
         } else if (type === 'sloper' || type === 'microcrimp' || type === 'pocket') {
           const cap = type === 'microcrimp' ? 26 : type === 'pocket' ? 30 : 34;
@@ -803,7 +818,7 @@ export function generateRoute(
         }
       }
 
-      const allowDualTex = Math.abs(angle) <= 34 && maybeDualTex(type, isRecoveryPass);
+      const allowDualTex = !isDeepRecovery && Math.abs(angle) <= 34 && maybeDualTex(type, isRecoveryPass);
       const placedHand = placeHoldWithoutOverlap(
         holds,
         {
@@ -815,7 +830,7 @@ export function generateRoute(
           role: 'normal',
           angle,
           scale: clamp(
-            bp.scaleBase + (isRecoveryPass ? 0.06 : 0) + rand(-0.05, 0.05),
+            bp.scaleBase + (isDeepRecovery ? 0.12 : isRecoveryPass ? 0.06 : 0) + rand(-0.05, 0.05),
             0.76,
             1.24
           ),
@@ -901,14 +916,16 @@ export function generateRoute(
     }
 
     // Top hold
-    const topMaxDx = g <= 1 ? 30 : g <= 4 ? 52 : 68;
+    const topMaxDx = isDeepRecovery ? 38 : g <= 1 ? 30 : g <= 4 ? 52 : 68;
     const topX = clamp(prevX + rand(-topMaxDx, topMaxDx), 74, WALL_WIDTH_CM - 74);
-    const topY = clamp(
-      Math.max(prevY + rand(bp.minDy, bp.maxDy + 6), g <= 1 ? 364 : 378),
-      362,
-      414
-    );
-    const topType = pick(bp.topPool);
+    const topY = isDeepRecovery
+      ? clamp(Math.max(prevY + rand(44, 58), 358), 358, 396)
+      : clamp(
+          Math.max(prevY + rand(bp.minDy, bp.maxDy + 6), g <= 1 ? 364 : 378),
+          362,
+          414
+        );
+    const topType: HoldType = isDeepRecovery ? (g <= 3 ? 'jug' : 'pinch') : pick(bp.topPool);
     const placedTop = placeHoldWithoutOverlap(
       holds,
       {
@@ -918,8 +935,8 @@ export function generateRoute(
         y: topY,
         type: topType,
         role: 'top',
-        angle: g >= 7 ? Math.round(rand(-18, 18)) : 0,
-        scale: clamp(bp.scaleBase + 0.08, 0.86, 1.26),
+        angle: g >= 7 && !isDeepRecovery ? Math.round(rand(-18, 18)) : 0,
+        scale: clamp(bp.scaleBase + (isDeepRecovery ? 0.12 : 0.08), 0.86, 1.26),
         color,
         styleFamily: holdFamily,
         shapeVariant: pickVariantForFamily(topType),
@@ -960,13 +977,8 @@ export function generateRoute(
     }
 
     // Verify solvability against the grade's reference climber at trialAngle!
-    const sol = suggestBeta(
-      numbered,
-      profile,
-      isRecoveryPass ? 22 : 20,
-      isRecoveryPass ? 18 : 14,
-      trialAngle
-    );
+    // Use (24, 20) consistently so every returned route is guaranteed solvable by standard beam search.
+    const sol = suggestBeta(numbered, profile, 24, 20, trialAngle);
     if (!sol.solved) continue;
 
     const metrics = measureRouteDifficulty(numbered, sol.steps, profile, trialAngle);

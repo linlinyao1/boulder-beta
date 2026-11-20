@@ -41,6 +41,10 @@ app.innerHTML = `
       </nav>
 
       <div class="mobile-top-actions">
+        <button id="mb-photo-btn" class="btn btn-sm btn-photo-pill" title="拍照 / 上传岩壁照生成线路" aria-label="拍照识图定线">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          <span>识图</span>
+        </button>
         <button id="mb-route-btn" class="btn btn-sm">V1 ▾</button>
         <button id="mb-body-btn" class="btn btn-sm mono">172cm</button>
       </div>
@@ -303,6 +307,7 @@ window.addEventListener('keydown', (e) => {
 });
 const sidebarEl = document.querySelector<HTMLElement>('#ui-sidebar')!;
 const sheetBackdrop = document.querySelector<HTMLDivElement>('#ui-sheet-backdrop')!;
+const mbPhotoBtn = document.querySelector<HTMLButtonElement>('#mb-photo-btn')!;
 const mbRouteBtn = document.querySelector<HTMLButtonElement>('#mb-route-btn')!;
 const mbBodyBtn = document.querySelector<HTMLButtonElement>('#mb-body-btn')!;
 const mbSheetTitle = document.querySelector<HTMLSpanElement>('#mb-sheet-title')!;
@@ -395,6 +400,11 @@ clearWallBtn.addEventListener('click', () => {
   engine.clearWall();
 });
 
+mbPhotoBtn.addEventListener('click', () => {
+  setMobileSheet('none');
+  engine.setMode('setter');
+  photoModal.open(latestSnap?.wallAngleDeg ?? 0);
+});
 mbRouteBtn.addEventListener('click', () => setMobileSheet(mobileSheet === 'route' ? 'none' : 'route'));
 zoomResetBtn.addEventListener('click', () => engine.resetCamera());
 mbBodyBtn.addEventListener('click', () => setMobileSheet(mobileSheet === 'body' ? 'none' : 'body'));
@@ -675,7 +685,10 @@ function renderMobilePad(snap: EngineSnapshot): void {
           .join('')}
       </div>
       <div class="mp-row mp-actions">
-        <button class="btn btn-sm" id="mp-photo-import">拍照识图</button>
+        <button class="btn btn-sm btn-photo-accent" id="mp-photo-import">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          拍照识图
+        </button>
         <button class="btn btn-sm" id="mp-role">${
           activeRole === 'start' ? '起步' : activeRole === 'top' ? '完攀' : '普通'
         }</button>
