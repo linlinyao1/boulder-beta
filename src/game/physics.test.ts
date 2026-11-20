@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { CLIMBER_PRESETS, computeAnatomy } from './climber';
+import { CLIMBER_PRESETS, computeAnatomy, getReferenceClimberForGrade } from './climber';
 import { emptyFreeMap } from './contact';
-import { generateRoute, measureRouteDifficulty, suggestBeta } from './generator';
+import {
+  estimateRouteGrade,
+  generateRoute,
+  measureRouteDifficulty,
+  suggestBeta,
+} from './generator';
 import { getHoldHitRadius } from './holds';
 import { blendPosesRigid, dist, doLegsIntersect } from './ik';
 import {
@@ -12,16 +17,27 @@ import {
 } from './physics';
 import { PRESET_ROUTES } from './presets';
 
-describe('Bouldering physics & Beta solver', () => {
-  it('solves all preset routes for the standard climber with zero leg pass-throughs', () => {
-    const standard = CLIMBER_PRESETS[1];
+describe('Bouldering physics, V1–V11 grades & Kilter wall angle', () => {
+  it('solves all preset routes for their grade-appropriate climber tier with zero leg pass-throughs', () => {
     for (const route of PRESET_ROUTES) {
-      const result = suggestBeta(route.holds, standard, 24);
-      expect(result.solved, `Expected preset "${route.name}" (${route.grade}) to be solvable`).toBe(true);
+      const gradeNum = Number(route.grade.replace(/[^0-9]/g, '')) || 1;
+      const climber = getReferenceClimberForGrade(gradeNum);
+      const result = suggestBeta(route.holds, climber, 24, 24, route.wallAngleDeg);
+      expect(
+        result.solved,
+        `Expected preset "${route.name}" (${route.grade} @ ${route.wallAngleDeg}°) to be solvable by ${climber.name}`
+      ).toBe(true);
       expect(result.steps.length).toBeGreaterThan(2);
 
-      const init = getInitialAssignment(route.holds, standard);
-      const evalSeq = evaluateBetaSequence(init, result.steps, route.holds, standard);
+      const init = getInitialAssignment(route.holds, climber);
+      const evalSeq = evaluateBetaSequence(
+        init,
+        result.steps,
+        route.holds,
+        climber,
+        emptyFreeMap(),
+        route.wallAngleDeg
+      );
       expect(evalSeq.reachesTop).toBe(true);
       expect(evalSeq.firstFailureIndex).toBeNull();
 
@@ -29,6 +45,37 @@ describe('Bouldering physics & Beta solver', () => {
         expect(doLegsIntersect(tr.evaluation.resultingPose)).toBe(false);
       }
     }
+  });
+
+  it('enforces real finger-strength gating on steep V8–V10 presets (standard 92 fails, V9/V11 pros solve)', () => {
+    const standard = CLIMBER_PRESETS[1]; // grip 92
+    const v9Adv = CLIMBER_PRESETS[5]; // grip 132
+    const v11Pro = CLIMBER_PRESETS[6]; // grip 154
+
+    const v8 = PRESET_ROUTES.find((r) => r.id === 'preset-v8-moonboard')!;
+    const v10 = PRESET_ROUTES.find((r) => r.id === 'preset-v10-roof-micro')!;
+
+    expect(suggestBeta(v8.holds, standard, 20, 16, v8.wallAngleDeg).solved).toBe(false);
+    expect(suggestBeta(v8.holds, v9Adv, 24, 24, v8.wallAngleDeg).solved).toBe(true);
+
+    expect(suggestBeta(v10.holds, standard, 20, 16, v10.wallAngleDeg).solved).toBe(false);
+    expect(suggestBeta(v10.holds, v11Pro, 24, 24, v10.wallAngleDeg).solved).toBe(true);
+  });
+
+  it('increases real physical difficulty & dynamic V-grade when tilting wall steeper (Kilter Board effect)', () => {
+    const v3 = PRESET_ROUTES.find((r) => r.id === 'preset-v3-sidepull')!;
+    const standard = CLIMBER_PRESETS[1];
+    const init = getInitialAssignment(v3.holds, standard);
+
+    const flatMove = evaluateHoldMove(init, 'rh', 'v3-h1', v3.holds, standard, emptyFreeMap(), 0);
+    const steepMove = evaluateHoldMove(init, 'rh', 'v3-h1', v3.holds, standard, emptyFreeMap(), 45);
+
+    expect(steepMove.gripScore).toBeLessThan(flatMove.gripScore);
+    expect(steepMove.staminaCost).toBeGreaterThan(flatMove.staminaCost);
+
+    const grade0 = estimateRouteGrade(v3.holds, 0);
+    const grade45 = estimateRouteGrade(v3.holds, 45);
+    expect(grade45.numericGrade).toBeGreaterThan(grade0.numericGrade + 2);
   });
 
   it('rejects inhuman leg crossing (left foot stepping to the right of right foot)', () => {
@@ -75,7 +122,6 @@ describe('Bouldering physics & Beta solver', () => {
     const standard = CLIMBER_PRESETS[1];
     const init = getInitialAssignment(v1.holds, standard);
 
-    // First free the right foot onto a nearby wall smear under the stance
     const smear = evaluateMove(
       { ...init, rf: null },
       emptyFreeMap(),
@@ -87,7 +133,6 @@ describe('Bouldering physics & Beta solver', () => {
     expect(smear.feasible, smear.failReason ?? 'smear should be feasible').toBe(true);
     expect(smear.warnings.some((w) => w.includes('踩墙') || w.includes('Smear'))).toBe(true);
 
-    // Flag the free left foot for counterbalance while right stays on a hold
     const flag = evaluateMove(
       { ...init, lf: null },
       emptyFreeMap(),
@@ -99,7 +144,6 @@ describe('Bouldering physics & Beta solver', () => {
     expect(flag.feasible, flag.failReason ?? 'flag should be feasible').toBe(true);
     expect(flag.gripScore).toBe(0);
 
-    // Back-flagging right foot behind left standing leg should be allowed (3D depth clearance!)
     const backFlag = evaluateMove(
       { ...init, lf: 'v1-f1', rf: null },
       emptyFreeMap(),
@@ -116,35 +160,41 @@ describe('Bouldering physics & Beta solver', () => {
     const standard = CLIMBER_PRESETS[1];
     const init = getInitialAssignment(dynoRoute.holds, standard);
 
-    // Static reach to the big jump jug vd-catch should be unreachable statically
-    const staticTry = evaluateHoldMove(init, 'rh', 'vd-catch', dynoRoute.holds, standard);
+    const staticTry = evaluateHoldMove(
+      init,
+      'rh',
+      'vd-catch',
+      dynoRoute.holds,
+      standard,
+      emptyFreeMap(),
+      dynoRoute.wallAngleDeg
+    );
     expect(staticTry.feasible).toBe(false);
 
-    // Explicit Double Dyno from start stance should succeed and cut feet loose!
     const doubleDyno = evaluateMove(
       init,
       emptyFreeMap(),
       'rh',
       { kind: 'dyno', holdId: 'vd-catch', bothHands: true },
       dynoRoute.holds,
-      standard
+      standard,
+      dynoRoute.wallAngleDeg
     );
     expect(doubleDyno.feasible, doubleDyno.failReason ?? 'double dyno should succeed').toBe(true);
     expect(doubleDyno.isDyno).toBe(true);
     expect(doubleDyno.cutsFeet).toBe(true);
 
-    // Cannot Dyno when both feet are dangling off the wall
     const noFeetDyno = evaluateMove(
       { ...init, lf: null, rf: null },
       emptyFreeMap(),
       'rh',
       { kind: 'dyno', holdId: 'vd-catch', bothHands: true },
       dynoRoute.holds,
-      standard
+      standard,
+      dynoRoute.wallAngleDeg
     );
     expect(noFeetDyno.feasible).toBe(false);
 
-    // Superhuman jump directly from start holds to the TOP hold or skipping to upper volume must FAIL (even for tall 188cm!)
     const tall = CLIMBER_PRESETS[2];
     const tallInit = getInitialAssignment(dynoRoute.holds, tall);
     for (const skipId of ['vd-vol', 'vd-top']) {
@@ -154,13 +204,13 @@ describe('Bouldering physics & Beta solver', () => {
         'rh',
         { kind: 'dyno', holdId: skipId, bothHands: true },
         dynoRoute.holds,
-        tall
+        tall,
+        dynoRoute.wallAngleDeg
       );
       expect(skipTry.feasible, `Tall climber should not dyno straight from start to ${skipId}`).toBe(false);
     }
 
-    // AI Beta solver should solve V4 Dyno Canyon using Dyno!
-    const sol = suggestBeta(dynoRoute.holds, standard, 24);
+    const sol = suggestBeta(dynoRoute.holds, standard, 24, 24, dynoRoute.wallAngleDeg);
     expect(sol.solved).toBe(true);
     expect(sol.steps.some((s) => s.target.kind === 'dyno')).toBe(true);
   });
@@ -170,16 +220,13 @@ describe('Bouldering physics & Beta solver', () => {
     const standard = CLIMBER_PRESETS[1];
     const init = getInitialAssignment(v1.holds, standard);
 
-    // Reach up from start stance to foothold v1-f4 (220, 168) with right hand while feet are supported
     const microCrimp = evaluateHoldMove(init, 'rh', 'v1-f4', v1.holds, standard);
     expect(microCrimp.feasible, microCrimp.failReason ?? 'supported micro-crimp should work').toBe(true);
     expect(microCrimp.rating).toBe('hard');
 
-    // Campusing onto a foothold with zero feet must fail
     const noFeetCrimp = evaluateHoldMove({ ...init, lf: null, rf: null }, 'rh', 'v1-f4', v1.holds, standard);
     expect(noFeetCrimp.feasible).toBe(false);
 
-    // Heavy low-grip climber cannot hold a tiny foothold
     const heavyWeak = { name: '重低握', heightCm: 198, apeIndexCm: 0, gripStrength: 66, flexibility: 80 };
     const heavyTry = evaluateHoldMove(init, 'rh', 'v1-f4', v1.holds, heavyWeak);
     expect(heavyTry.feasible).toBe(false);
@@ -193,59 +240,82 @@ describe('Bouldering physics & Beta solver', () => {
     const shortInit = getInitialAssignment(morpho.holds, shortClimber);
     const tallInit = getInitialAssignment(morpho.holds, tallClimber);
 
-    const shortDirect = evaluateHoldMove(shortInit, 'rh', 'v5-big1', morpho.holds, shortClimber);
-    const tallDirect = evaluateHoldMove(tallInit, 'rh', 'v5-big1', morpho.holds, tallClimber);
+    const shortDirect = evaluateHoldMove(
+      shortInit,
+      'rh',
+      'v5-big1',
+      morpho.holds,
+      shortClimber,
+      emptyFreeMap(),
+      morpho.wallAngleDeg
+    );
+    const tallDirect = evaluateHoldMove(
+      tallInit,
+      'rh',
+      'v5-big1',
+      morpho.holds,
+      tallClimber,
+      emptyFreeMap(),
+      morpho.wallAngleDeg
+    );
 
     expect(tallDirect.reachRatio).toBeLessThan(shortDirect.reachRatio);
-    const shortBeta = suggestBeta(morpho.holds, shortClimber, 24);
+    const shortBeta = suggestBeta(morpho.holds, shortClimber, 24, 24, morpho.wallAngleDeg);
     expect(shortBeta.solved).toBe(true);
   });
 
-  it('calibrates procedural V0 vs V6 routes so higher V-grades are measurably harder', () => {
-    const standard = CLIMBER_PRESETS[1];
-    let v0EstSum = 0;
-    let v6EstSum = 0;
-    for (let i = 0; i < 3; i++) {
-      const r0 = generateRoute(0, standard);
-      const s0 = suggestBeta(r0.holds, standard, 24);
-      expect(s0.solved).toBe(true);
-      const m0 = measureRouteDifficulty(r0.holds, s0.steps, standard);
-      v0EstSum += m0.estimatedGrade;
+  it('calibrates procedural V1 vs V6 vs V10 routes so higher V-grades are measurably harder', () => {
+    let v1Sum = 0;
+    let v6Sum = 0;
+    let v10Sum = 0;
+    for (let i = 0; i < 2; i++) {
+      const r1 = generateRoute(1);
+      const p1 = getReferenceClimberForGrade(1);
+      const s1 = suggestBeta(r1.holds, p1, 24, 20, r1.wallAngleDeg);
+      expect(s1.solved).toBe(true);
+      v1Sum += measureRouteDifficulty(r1.holds, s1.steps, p1, r1.wallAngleDeg).estimatedGrade;
 
-      const r6 = generateRoute(6, standard);
-      const s6 = suggestBeta(r6.holds, standard, 24);
+      const r6 = generateRoute(6);
+      const p6 = getReferenceClimberForGrade(6);
+      const s6 = suggestBeta(r6.holds, p6, 24, 20, r6.wallAngleDeg);
       expect(s6.solved).toBe(true);
-      const m6 = measureRouteDifficulty(r6.holds, s6.steps, standard);
-      v6EstSum += m6.estimatedGrade;
+      v6Sum += measureRouteDifficulty(r6.holds, s6.steps, p6, r6.wallAngleDeg).estimatedGrade;
+
+      const r10 = generateRoute(10);
+      const p10 = getReferenceClimberForGrade(10);
+      const s10 = suggestBeta(r10.holds, p10, 24, 20, r10.wallAngleDeg);
+      expect(s10.solved).toBe(true);
+      v10Sum += measureRouteDifficulty(r10.holds, s10.steps, p10, r10.wallAngleDeg).estimatedGrade;
     }
-    expect(v6EstSum / 3).toBeGreaterThan(v0EstSum / 3 + 2.2);
+    expect(v6Sum / 2).toBeGreaterThan(v1Sum / 2 + 2.5);
+    expect(v10Sum / 2).toBeGreaterThan(v6Sum / 2 + 2.5);
   });
 
-  it('generates climbable procedural routes across V0..V7 with zero overlapping holds', () => {
-    const standard = CLIMBER_PRESETS[1];
-    for (const grade of [0, 1, 2, 3, 4, 5, 6, 7]) {
-      for (let run = 0; run < 2; run++) {
-        const route = generateRoute(grade, standard);
-        expect(route.holds.some((h) => h.role === 'start')).toBe(true);
-        expect(route.holds.some((h) => h.role === 'top')).toBe(true);
+  it('generates climbable procedural routes across V1..V11 with zero overlapping holds', () => {
+    for (const grade of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) {
+      const route = generateRoute(grade);
+      expect(route.grade).toBe(`V${grade}`);
+      expect(route.holds.some((h) => h.role === 'start')).toBe(true);
+      expect(route.holds.some((h) => h.role === 'top')).toBe(true);
 
-        // Verify every pair of holds maintains strict visual & hit-radius separation
-        for (let i = 0; i < route.holds.length; i++) {
-          for (let j = i + 1; j < route.holds.length; j++) {
-            const a = route.holds[i];
-            const b = route.holds[j];
-            const minGap = getHoldHitRadius(a) * 1.15 + getHoldHitRadius(b) * 1.15 + 10;
-            expect(
-              dist(a, b),
-              `Overlap on V${grade} between #${a.label} (${a.type}) and #${b.label} (${b.type})`
-            ).toBeGreaterThanOrEqual(minGap);
-          }
-        }
-        if (run === 0 && grade <= 6) {
-          const sol = suggestBeta(route.holds, standard, 24);
-          expect(sol.solved, `Generated V${grade} should be solvable`).toBe(true);
+      for (let i = 0; i < route.holds.length; i++) {
+        for (let j = i + 1; j < route.holds.length; j++) {
+          const a = route.holds[i];
+          const b = route.holds[j];
+          const minGap = getHoldHitRadius(a) * 1.15 + getHoldHitRadius(b) * 1.15 + 10;
+          expect(
+            dist(a, b),
+            `Overlap on V${grade} between #${a.label} (${a.type}) and #${b.label} (${b.type})`
+          ).toBeGreaterThanOrEqual(minGap);
         }
       }
+
+      const refClimber = getReferenceClimberForGrade(grade);
+      const sol = suggestBeta(route.holds, refClimber, 24, 20, route.wallAngleDeg);
+      expect(
+        sol.solved,
+        `Generated V${grade} (${route.wallAngleDeg}°) should be solvable by ${refClimber.name}`
+      ).toBe(true);
     }
   });
 });

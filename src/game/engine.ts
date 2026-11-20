@@ -10,7 +10,7 @@ import {
   smearTarget,
   targetLabel,
 } from './contact';
-import { generateRoute, nextUid, suggestBeta } from './generator';
+import { estimateRouteGrade, generateRoute, LiveGradeEstimate, nextUid, suggestBeta } from './generator';
 import { getHoldHitRadius, HOLD_COLORS, HOLD_SPECS, LIMB_META, renumberHolds } from './holds';
 import {
   blendPosesRigid,
@@ -54,6 +54,7 @@ import {
   MoveEvaluation,
   PlanContactMode,
   RouteProblem,
+  RouteStyle,
   SolvedPose,
   Vec2,
   WALL_HEIGHT_CM,
@@ -72,6 +73,11 @@ export interface EngineSnapshot {
   mode: GameMode;
   routeName: string;
   routeGrade: string;
+  baseRouteGrade: string;
+  wallAngleDeg: number;
+  baseWallAngleDeg: number;
+  liveGradeEstimate: LiveGradeEstimate;
+  routeStyle: RouteStyle;
   routeDescription: string;
   holds: Hold[];
   selectedHoldId: string | null;
@@ -166,6 +172,16 @@ export class BoulderEngine {
   private mode: GameMode = 'plan';
   private routeName = '';
   private routeGrade = '';
+  private baseRouteGrade = '';
+  private wallAngleDeg = 0;
+  private baseWallAngleDeg = 0;
+  private routeStyle: RouteStyle = 'balanced';
+  private liveGradeEstimate: LiveGradeEstimate = {
+    gradeLabel: 'V1',
+    numericGrade: 1,
+    requiredTier: 'standard',
+    recommendedGrip: 92,
+  };
   private routeDescription = '';
   private holds: Hold[] = [];
   private profile: ClimberProfile = { ...CLIMBER_PRESETS[1] };
@@ -319,6 +335,7 @@ export class BoulderEngine {
     this.draggingHoldId = null;
 
     if (mode === 'plan') {
+      if (this.baseRouteGrade === 'Custom') this.refreshLiveGrade();
       this.recomputeBeta();
       this.syncPlanPose(true);
     } else if (mode === 'climb') {
@@ -338,20 +355,46 @@ export class BoulderEngine {
     this.cameraPanY = 0;
     this.routeName = route.name;
     this.routeGrade = route.grade;
+    this.baseRouteGrade = route.grade;
+    this.wallAngleDeg = route.wallAngleDeg ?? 0;
+    this.baseWallAngleDeg = this.wallAngleDeg;
+    this.routeStyle = route.style ?? 'balanced';
     this.routeDescription = route.description;
     this.holds = renumberHolds(route.holds.map((h) => ({ ...h })));
     this.brush.color = route.holdColor;
     this.selectedHoldId = null;
     this.betaSteps = [];
     this.inspectedStepIndex = -1;
+    this.refreshLiveGrade();
     this.recomputeBeta();
     this.syncPlanPose(true);
     if (emitChange) this.emit();
   }
 
-  public generateNewRoute(gradeNum: number): void {
-    // Calibrate V-grade objectively against standard 172cm reference climber
-    const route = generateRoute(gradeNum);
+  public setWallAngle(angleDeg: number): void {
+    const clamped = clamp(Math.round(angleDeg / 5) * 5, -10, 55);
+    if (clamped === this.wallAngleDeg) return;
+    this.wallAngleDeg = clamped;
+    this.refreshLiveGrade();
+    if (this.wallAngleDeg === this.baseWallAngleDeg && this.baseRouteGrade !== 'Custom') {
+      this.routeGrade = this.baseRouteGrade;
+    } else {
+      this.routeGrade = this.liveGradeEstimate.gradeLabel;
+    }
+    this.recomputeBeta();
+    this.syncPlanPose(false);
+    this.emit();
+  }
+
+  private refreshLiveGrade(): void {
+    this.liveGradeEstimate = estimateRouteGrade(this.holds, this.wallAngleDeg);
+    if (this.baseRouteGrade === 'Custom') {
+      this.routeGrade = this.liveGradeEstimate.gradeLabel;
+    }
+  }
+
+  public generateNewRoute(gradeNum: number, style?: RouteStyle): void {
+    const route = generateRoute(gradeNum, undefined, style);
     this.loadRoute(route, false);
     this.mode = 'plan';
     this.recomputeBeta();
@@ -363,12 +406,17 @@ export class BoulderEngine {
     this.stopClimbInternal();
     this.routeName = '自定义抱石线';
     this.routeGrade = 'Custom';
-    this.routeDescription = '点击岩墙放置岩点，拖拽移动位置，至少设置 1 个起步点与 1 个完攀点。';
+    this.baseRouteGrade = 'Custom';
+    this.wallAngleDeg = 0;
+    this.baseWallAngleDeg = 0;
+    this.routeStyle = 'balanced';
+    this.routeDescription = '点击岩墙放置岩点，拖拽移动位置，可自由调整墙面倾角（-10° ~ 55°）。';
     this.holds = [];
     this.selectedHoldId = null;
     this.betaSteps = [];
     this.inspectedStepIndex = -1;
     this.mode = 'setter';
+    this.refreshLiveGrade();
     this.recomputeBeta();
     this.emit();
   }
@@ -534,7 +582,7 @@ export class BoulderEngine {
   }
 
   public autoSuggestBeta(): { solved: boolean; stepsCount: number } {
-    const sol = suggestBeta(this.holds, this.profile, 24);
+    const sol = suggestBeta(this.holds, this.profile, 24, 24, this.wallAngleDeg);
     this.betaSteps = sol.steps;
     this.inspectedStepIndex = sol.steps.length - 1;
     this.recomputeBeta();
@@ -640,7 +688,14 @@ export class BoulderEngine {
 
   private recomputeBeta(): void {
     const initial = getInitialAssignment(this.holds, this.profile);
-    const res = evaluateBetaSequence(initial, this.betaSteps, this.holds, this.profile);
+    const res = evaluateBetaSequence(
+      initial,
+      this.betaSteps,
+      this.holds,
+      this.profile,
+      emptyFreeMap(),
+      this.wallAngleDeg
+    );
     this.betaTraces = res.traces;
     this.betaReachesTop = res.reachesTop;
     this.betaFirstFailure = res.firstFailureIndex;
@@ -656,15 +711,39 @@ export class BoulderEngine {
     for (const h of this.holds) {
       if (this.planContactMode === 'doubleDyno') {
         if (assignment.lh === h.id && assignment.rh === h.id) continue;
-        const ev = evaluateMove(assignment, free, 'rh', dynoTarget(h.id, true), this.holds, this.profile);
+        const ev = evaluateMove(
+          assignment,
+          free,
+          'rh',
+          dynoTarget(h.id, true),
+          this.holds,
+          this.profile,
+          this.wallAngleDeg
+        );
         this.previewEvaluations.set(h.id, ev);
       } else if (this.planContactMode === 'dyno') {
         if (assignment[this.activeLimb] === h.id) continue;
-        const ev = evaluateMove(assignment, free, this.activeLimb, dynoTarget(h.id, false), this.holds, this.profile);
+        const ev = evaluateMove(
+          assignment,
+          free,
+          this.activeLimb,
+          dynoTarget(h.id, false),
+          this.holds,
+          this.profile,
+          this.wallAngleDeg
+        );
         this.previewEvaluations.set(h.id, ev);
       } else {
         if (assignment[this.activeLimb] === h.id) continue;
-        const ev = evaluateMove(assignment, free, this.activeLimb, holdTarget(h.id), this.holds, this.profile);
+        const ev = evaluateMove(
+          assignment,
+          free,
+          this.activeLimb,
+          holdTarget(h.id),
+          this.holds,
+          this.profile,
+          this.wallAngleDeg
+        );
         this.previewEvaluations.set(h.id, ev);
       }
     }
@@ -720,7 +799,8 @@ export class BoulderEngine {
       step.limb,
       step.target,
       this.holds,
-      this.profile
+      this.profile,
+      this.wallAngleDeg
     );
 
     const support = detachLimb(currentAssignment, currentFree, step.limb);
@@ -1282,6 +1362,7 @@ export class BoulderEngine {
         panX: this.cameraPanX,
         panY: this.cameraPanY,
       },
+      wallAngleDeg: this.wallAngleDeg,
       mode: this.mode,
       holds: this.holds,
       profile: this.profile,
@@ -1549,7 +1630,8 @@ export class BoulderEngine {
             this.activeLimb,
             target,
             this.holds,
-            this.profile
+            this.profile,
+            this.wallAngleDeg
           );
           changed = true;
         } else if (this.wallHoverPos) {
@@ -1676,6 +1758,11 @@ export class BoulderEngine {
       mode: this.mode,
       routeName: this.routeName,
       routeGrade: this.routeGrade,
+      baseRouteGrade: this.baseRouteGrade,
+      wallAngleDeg: this.wallAngleDeg,
+      baseWallAngleDeg: this.baseWallAngleDeg,
+      liveGradeEstimate: this.liveGradeEstimate,
+      routeStyle: this.routeStyle,
       routeDescription: this.routeDescription,
       holds: this.holds,
       selectedHoldId: this.selectedHoldId,

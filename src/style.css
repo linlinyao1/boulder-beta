@@ -1031,6 +1031,57 @@ input[type='range'] {
   gap: 6px;
 }
 
+.kilter-slider-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.angle-chip-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+
+.angle-chip {
+  border: 1px solid var(--border);
+  background: var(--panel-subtle);
+  color: var(--ink-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 3px 0;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.angle-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+
+.angle-chip.active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #f7f8f5;
+}
+
+.tier-hint-bar {
+  margin-top: 7px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #fffbeb;
+  border: 1px solid #f59e0b;
+  color: #92400e;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
 @media (max-width: 860px) {
   .app-shell {
     grid-template-rows: 46px 1fr;
@@ -1113,10 +1164,15 @@ input[type='range'] {
     gap: 5px;
   }
 
-  .mp-grid-6 {
+  .mp-grid-7 {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    gap: 4px;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 3px;
+  }
+
+  .mp-grid-7 .mp-btn {
+    font-size: 11px;
+    padding: 0 2px;
   }
 
   .mp-btn {
@@ -1244,6 +1300,7 @@ input[type='range'] {
 
   /* Show only the requested section inside the mobile sheet */
   .sidebar #ui-body-section,
+  .sidebar #ui-angle-section,
   .sidebar #ui-mode-panel,
   .sidebar #ui-mobile-route-section {
     display: none;

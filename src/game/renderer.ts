@@ -1,5 +1,5 @@
 import { computeAnatomy } from './climber';
-import { getHoldHitRadius, getHoldOptimalPullDir, LIMB_META } from './holds';
+import { getHoldHitRadius, getHoldOptimalPullDir, getWallAngleLabel, LIMB_META } from './holds';
 import { clamp, lerp, lerpVec } from './ik';
 import { BetaTraceStep, getDynoEnvelope } from './physics';
 import {
@@ -49,6 +49,7 @@ export interface WallTransform {
 
 export interface RenderContextState {
   camera?: CameraView;
+  wallAngleDeg?: number;
   mode: GameMode;
   holds: Hold[];
   profile: ClimberProfile;
@@ -208,11 +209,21 @@ export function renderScene(
     ctx.stroke();
   }
 
-  // Subtle top studio lighting gradient across wall
+  // Subtle top studio lighting gradient across wall (adapts to wall overhang/slab angle!)
+  const wallAngle = state.wallAngleDeg ?? 0;
+  const overhangRatio = clamp(wallAngle / 55, 0, 1);
+  const slabRatio = clamp(-wallAngle / 10, 0, 1);
   const lightGrad = ctx.createLinearGradient(0, tr.wallTop, 0, tr.wallTop + tr.wallPixelH);
-  lightGrad.addColorStop(0, 'rgba(255, 252, 244, 0.16)');
-  lightGrad.addColorStop(0.65, 'rgba(255, 255, 255, 0)');
-  lightGrad.addColorStop(1, 'rgba(42, 32, 20, 0.14)');
+  if (overhangRatio > 0.05) {
+    // Overhang casts dramatic underside shadow at top & deeper ambient shading
+    lightGrad.addColorStop(0, `rgba(22, 18, 14, ${0.12 + overhangRatio * 0.24})`);
+    lightGrad.addColorStop(0.45, `rgba(28, 22, 16, ${0.04 + overhangRatio * 0.1})`);
+    lightGrad.addColorStop(1, `rgba(255, 250, 238, ${0.06 + overhangRatio * 0.08})`);
+  } else {
+    lightGrad.addColorStop(0, `rgba(255, 252, 244, ${0.16 + slabRatio * 0.16})`);
+    lightGrad.addColorStop(0.65, 'rgba(255, 255, 255, 0)');
+    lightGrad.addColorStop(1, 'rgba(42, 32, 20, 0.14)');
+  }
   ctx.fillStyle = lightGrad;
   ctx.fillRect(tr.wallLeft, tr.wallTop, tr.wallPixelW, tr.wallPixelH);
 
@@ -274,6 +285,9 @@ export function renderScene(
   // Metric height ticks on left margin (1m, 2m, 3m, 4m)
   drawHeightRuler(ctx, tr);
 
+  // Side-profile wall tilt inclinometer badge (Kilter-style visual tilt feedback)
+  drawWallAngleBadge(ctx, tr, state.wallAngleDeg ?? 0);
+
   // 8. Crash pad mat at the bottom
   drawCrashPad(ctx, tr);
 
@@ -321,6 +335,60 @@ function drawHeightRuler(ctx: CanvasRenderingContext2D, tr: WallTransform): void
     ctx.stroke();
     ctx.fillText(`${m}m`, tr.wallLeft - 9, p.y);
   }
+  ctx.restore();
+}
+
+function drawWallAngleBadge(ctx: CanvasRenderingContext2D, tr: WallTransform, angleDeg: number): void {
+  const bx = tr.wallLeft + 8;
+  const by = tr.wallTop + 8;
+  const bw = 96;
+  const bh = 28;
+  const rad = (clamp(angleDeg, -10, 55) * Math.PI) / 180;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(24, 29, 34, 0.78)';
+  ctx.beginPath();
+  ctx.roundRect(bx, by, bw, bh, 6);
+  ctx.fill();
+
+  // Mini side-profile wall inclinometer icon
+  const ox = bx + 14;
+  const oy = by + 22;
+  const len = 15;
+  // Vertical reference tick
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 2]);
+  ctx.beginPath();
+  ctx.moveTo(ox, oy);
+  ctx.lineTo(ox, oy - len);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Actual tilted wall bar (overhang tilts right/forward over mat, slab tilts left)
+  const tx = ox + Math.sin(rad) * len;
+  const ty = oy - Math.cos(rad) * len;
+  ctx.strokeStyle = angleDeg >= 35 ? '#F97316' : angleDeg < 0 ? '#38BDF8' : '#F7F8F5';
+  ctx.lineWidth = 2.4;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(ox, oy);
+  ctx.lineTo(tx, ty);
+  ctx.stroke();
+
+  // Floor baseline
+  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(ox - 5, oy);
+  ctx.lineTo(ox + 12, oy);
+  ctx.stroke();
+
+  ctx.font = '600 10px "JetBrains Mono", "PingFang SC", sans-serif';
+  ctx.fillStyle = '#F7F8F5';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(getWallAngleLabel(angleDeg), bx + 30, by + bh / 2 + 0.5);
   ctx.restore();
 }
 
@@ -374,7 +442,8 @@ function drawReachArc(ctx: CanvasRenderingContext2D, tr: WallTransform, state: R
       state.holds,
       state.profile,
       isDouble,
-      isDouble ? undefined : otherHand
+      isDouble ? undefined : otherHand,
+      state.wallAngleDeg ?? 0
     );
     if (!env.canLaunch) return;
 
@@ -484,8 +553,11 @@ function drawHold(ctx: CanvasRenderingContext2D, tr: WallTransform, hold: Hold, 
     ctx.bezierCurveTo(r * 1.12, r * 0.65, r * 0.45, r * 0.78, 0, r * 0.68);
     ctx.bezierCurveTo(-r * 0.55, r * 0.82, -r * 1.1, r * 0.62, -r * 1.15, -r * 0.15);
   } else if (hold.type === 'crimp') {
-    // Sharp narrow horizontal bar edge
+    // Sharp narrow horizontal bar edge (15-20mm)
     ctx.roundRect(-r * 1.2, -r * 0.42, r * 2.4, r * 0.84, r * 0.25);
+  } else if (hold.type === 'microcrimp') {
+    // Razor-thin 6-10mm micro edge strip
+    ctx.roundRect(-r * 1.32, -r * 0.3, r * 2.64, r * 0.6, r * 0.16);
   } else if (hold.type === 'pinch') {
     // Vertical-ish sculpted trapezoid pinch block
     ctx.moveTo(-r * 0.72, -r * 0.88);
@@ -531,6 +603,15 @@ function drawHold(ctx: CanvasRenderingContext2D, tr: WallTransform, hold: Hold, 
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.58)';
     ctx.lineWidth = Math.max(1.5, r * 0.16);
     ctx.lineCap = 'round';
+    ctx.stroke();
+  } else if (hold.type === 'microcrimp') {
+    // Razor-crisp bright edge crease to distinguish 6-10mm microcrimp immediately
+    ctx.beginPath();
+    ctx.moveTo(-r * 1.05, -r * 0.14);
+    ctx.lineTo(r * 1.05, -r * 0.14);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.82)';
+    ctx.lineWidth = Math.max(1.3, r * 0.15);
+    ctx.lineCap = 'butt';
     ctx.stroke();
   } else if (hold.type === 'sloper') {
     ctx.beginPath();

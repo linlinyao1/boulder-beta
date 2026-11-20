@@ -3,7 +3,16 @@ export const WALL_HEIGHT_CM = 450;
 
 export type GameMode = 'setter' | 'plan' | 'climb';
 
-export type HoldType = 'jug' | 'crimp' | 'pinch' | 'sloper' | 'foothold' | 'volume';
+export type HoldType =
+  | 'jug'
+  | 'pinch'
+  | 'crimp'
+  | 'microcrimp'
+  | 'sloper'
+  | 'foothold'
+  | 'volume';
+
+export type RouteStyle = 'balanced' | 'power' | 'tech' | 'dyno';
 
 export type HoldRole = 'start' | 'normal' | 'top';
 
@@ -30,8 +39,8 @@ export interface ClimberProfile {
   name: string;
   heightCm: number; // 140..205
   apeIndexCm: number; // -10..+16 (wingspan = height + apeIndex)
-  gripStrength: number; // 60..120
-  flexibility: number; // 60..120
+  gripStrength: number; // 65..160 (92 ≈ V4–V5, 132 ≈ V9, 154 ≈ V11)
+  flexibility: number; // 65..135
 }
 
 export interface ClimberAnatomy {
@@ -131,7 +140,9 @@ export interface MoveEvaluation {
 export interface RouteProblem {
   id: string;
   name: string;
-  grade: string; // e.g. 'V1', 'V5'
+  grade: string; // e.g. 'V1'..'V11'
+  wallAngleDeg: number; // -10 (slab) .. 0 (vertical) .. +55 (steep overhang)
+  style?: RouteStyle;
   description: string;
   holdColor: string;
   holds: Hold[];

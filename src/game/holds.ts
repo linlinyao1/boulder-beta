@@ -42,13 +42,25 @@ export const HOLD_SPECS: Record<HoldType, HoldSpec> = {
     type: 'crimp',
     nameZh: '抠点 (Crimp)',
     shortZh: '抠点',
-    description: '窄边指力点，方向敏感，高难度核心点，耗费握力。',
+    description: '15–20mm 窄边指力点，方向敏感，中高难度核心点，耗费握力。',
     handGrip: 0.64,
     footGrip: 0.82,
     angleToleranceDeg: 68,
     staminaMultiplier: 1.42,
     baseRadiusCm: 9.5,
     comDependency: 0.35,
+  },
+  microcrimp: {
+    type: 'microcrimp',
+    nameZh: '微抠点 (Micro-crimp)',
+    shortZh: '微抠点',
+    description: '6–10mm 极窄指力边，角度容错极低，V8–V11 标志性难点岩点。',
+    handGrip: 0.48,
+    footGrip: 0.78,
+    angleToleranceDeg: 48,
+    staminaMultiplier: 1.72,
+    baseRadiusCm: 7.5,
+    comDependency: 0.42,
   },
   sloper: {
     type: 'sloper',
@@ -127,6 +139,33 @@ export function getHoldOptimalPullDir(angleDeg: number): Vec2 {
 
 export function getHoldHitRadius(hold: Hold): number {
   return HOLD_SPECS[hold.type].baseRadiusCm * hold.scale;
+}
+
+/**
+ * Physical grip positivity modifier from hold size (scale 0.75..1.35).
+ * Anchored at scale=1.0 -> 1.00 so smaller edges (0.75x) are noticeably harder to hold.
+ */
+export function getHoldScaleGripFactor(scale: number): number {
+  return Math.max(0.8, Math.min(1.15, 1 + (scale - 1.0) * 0.52));
+}
+
+export function getWallAngleLabel(angleDeg: number): string {
+  if (angleDeg <= -5) return `${angleDeg}° 平衡板`;
+  if (angleDeg < 5) return `${angleDeg}° 直壁`;
+  if (angleDeg <= 20) return `${angleDeg}° 轻仰角`;
+  if (angleDeg <= 35) return `${angleDeg}° 中仰角`;
+  if (angleDeg <= 45) return `${angleDeg}° 陡仰角`;
+  return `${angleDeg}° 极陡屋檐`;
+}
+
+export function getGradeTierColor(gradeStr: string): string {
+  const m = gradeStr.match(/V(\d+)/i);
+  if (!m) return '#181D22';
+  const g = Number(m[1]);
+  if (g <= 2) return '#15803D'; // Beginner: green
+  if (g <= 5) return '#1D4ED8'; // Intermediate: cobalt
+  if (g <= 8) return '#C2410C'; // Advanced: burnt orange
+  return '#991B1B'; // Expert / Pro V9–V11: crimson
 }
 
 export function renumberHolds(holds: Hold[]): Hold[] {

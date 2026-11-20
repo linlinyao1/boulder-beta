@@ -8,7 +8,7 @@ import {
   isSupportingLimb,
   supportingLimbs,
 } from './contact';
-import { getHoldOptimalPullDir, HOLD_SPECS, LIMB_META } from './holds';
+import { getHoldOptimalPullDir, getHoldScaleGripFactor, HOLD_SPECS, LIMB_META } from './holds';
 import { clamp, dist, doLegsIntersect, solvePose } from './ik';
 import {
   BetaStep,
@@ -28,6 +28,46 @@ import {
 
 export function buildHoldMap(holds: Hold[]): Map<string, Hold> {
   return new Map(holds.map((h) => [h.id, h]));
+}
+
+export interface WallAnglePhysics {
+  angleDeg: number;
+  sinOverhang: number;
+  sinSlab: number;
+  handGripMult: number;
+  handStaminaMult: number;
+  footStaminaMult: number;
+  slabBalanceMult: number;
+  smearWallMult: number;
+  dynoRiseMult: number;
+  minHandGripThreshold: number;
+}
+
+/**
+ * Computes physical force modifiers from wall tilt angle:
+ * - Positive angles (+5°..+55°): Overhang pulls climber away from wall (mg*sinθ),
+ *   raising finger load, stamina drain, cut-loose likelihood, and grip threshold.
+ * - Negative angles (-10°..-5°): Slab eases finger load & helps smears,
+ *   but sharply amplifies balance/CoM sensitivity.
+ */
+export function computeWallAnglePhysics(wallAngleDeg = 0): WallAnglePhysics {
+  const angleDeg = clamp(wallAngleDeg, -10, 55);
+  const rad = (angleDeg * Math.PI) / 180;
+  const sinOverhang = Math.max(0, Math.sin(rad));
+  const sinSlab = Math.max(0, -Math.sin(rad));
+
+  return {
+    angleDeg,
+    sinOverhang,
+    sinSlab,
+    handGripMult: 1 - 0.44 * sinOverhang + 0.14 * sinSlab,
+    handStaminaMult: 1 + 0.92 * sinOverhang - 0.16 * sinSlab,
+    footStaminaMult: 1 + 0.44 * sinOverhang,
+    slabBalanceMult: 1 + 1.15 * sinSlab,
+    smearWallMult: clamp(1 - 0.52 * sinOverhang + 0.25 * sinSlab, 0.48, 1.18),
+    dynoRiseMult: clamp(Math.cos(Math.max(0, rad)) * 0.48 + 0.52, 0.76, 1.0),
+    minHandGripThreshold: Math.round(24 + sinOverhang * 16),
+  };
 }
 
 /**
@@ -200,10 +240,12 @@ export function getDynoEnvelope(
   holds: Hold[],
   profile: ClimberProfile,
   bothHands: boolean,
-  stayingHand?: LimbId
+  stayingHand?: LimbId,
+  wallAngleDeg = 0
 ): DynoEnvelope {
   const holdMap = buildHoldMap(holds);
   const anatomy = computeAnatomy(profile);
+  const wallPhys = computeWallAnglePhysics(wallAngleDeg);
   const startPose = solvePose(
     assignment,
     holdMap,
@@ -286,7 +328,8 @@ export function getDynoEnvelope(
   );
 
   const baseJumpRise = bothHands ? 24 : 16;
-  const maxJumpRiseCm = baseJumpRise * legStrokeScale * footImpulse * powerFactor;
+  const maxJumpRiseCm =
+    baseJumpRise * legStrokeScale * footImpulse * powerFactor * wallPhys.dynoRiseMult;
 
   const launchOrigin: Vec2 = {
     x: startPose.chest.x * 0.55 + avgFootX * 0.45,
@@ -319,10 +362,12 @@ function evaluateDynoMove(
   limb: LimbId,
   target: Extract<LimbTarget, { kind: 'dyno' }>,
   holds: Hold[],
-  profile: ClimberProfile
+  profile: ClimberProfile,
+  wallAngleDeg = 0
 ): MoveEvaluation {
   const holdMap = buildHoldMap(holds);
   const anatomy = computeAnatomy(profile);
+  const wallPhys = computeWallAnglePhysics(wallAngleDeg);
   const targetHold = holdMap.get(target.holdId) ?? null;
   const warnings: string[] = [];
 
@@ -360,7 +405,8 @@ function evaluateDynoMove(
     holds,
     profile,
     target.bothHands,
-    target.bothHands ? undefined : otherHand
+    target.bothHands ? undefined : otherHand,
+    wallAngleDeg
   );
 
   if (!env.canLaunch) {
@@ -432,7 +478,8 @@ function evaluateDynoMove(
       freeOverrides(testKeepFeet.free)
     );
     const maxLegStretch = Math.max(keepPose.stretchRatios.lf, keepPose.stretchRatios.rf);
-    if (maxLegStretch > 1.01 || dynoEffort > 0.82) {
+    const cutThreshold = 0.82 - wallPhys.sinOverhang * 0.22;
+    if (maxLegStretch > 1.01 || dynoEffort > cutThreshold) {
       cutsFeet = true;
     }
   }
@@ -447,15 +494,21 @@ function evaluateDynoMove(
     freeOverrides(next.free)
   );
 
-  // Catch grip quality on impact
+  // Catch grip quality on impact (scales with hold size, wall overhang, and climber strength-to-weight)
   const spec = HOLD_SPECS[targetHold.type];
+  const scaleGrip = getHoldScaleGripFactor(targetHold.scale);
   const alignLimb: LimbId = target.bothHands ? 'rh' : limb;
   const { alignment, angleDiffDeg } = computeHoldAlignment(targetHold, alignLimb, nextPose);
   const strengthToWeight = (profile.gripStrength / 92) / Math.pow(anatomy.weightFactor, 0.5);
-  const catchFactor = spec.handGrip * alignment * clamp(strengthToWeight, 0.74, 1.32);
+  const catchFactor =
+    spec.handGrip *
+    scaleGrip *
+    wallPhys.handGripMult *
+    alignment *
+    clamp(strengthToWeight, 0.74, 1.78);
   const gripScore = clamp(Math.round(catchFactor * 100), 0, 100);
 
-  const minCatch = target.bothHands ? 0.38 : 0.45;
+  const minCatch = target.bothHands ? 0.38 : 0.44;
   if (alignment < 0.34) {
     return failEval(
       nextPose,
@@ -474,9 +527,11 @@ function evaluateDynoMove(
   }
 
   if (catchFactor < minCatch) {
+    const angleTip =
+      wallPhys.angleDeg >= 25 ? `（${wallPhys.angleDeg}° 仰角冲击负荷极高，需更高指力或调缓倾角）` : '';
     return failEval(
       nextPose,
-      `飞跃冲击力过大，未能抓停 #${targetHold.label}（${spec.shortZh}抓握面不足）`,
+      `飞跃冲击力过大，未能抓停 #${targetHold.label} ${spec.shortZh}${angleTip}`,
       {
         isDyno: true,
         isDoubleDyno: target.bothHands,
@@ -505,9 +560,10 @@ function evaluateDynoMove(
         (target.bothHands ? 17 : 14) *
           (0.75 + intensity * 0.55) *
           (0.8 + spec.staminaMultiplier * 0.35) *
+          wallPhys.handStaminaMult *
           (anatomy.weightFactor / (profile.gripStrength / 92)),
-        10,
-        30
+        9,
+        34
       ) * 10
     ) / 10;
 
@@ -541,13 +597,15 @@ export function evaluateMove(
   limb: LimbId,
   target: LimbTarget,
   holds: Hold[],
-  profile: ClimberProfile
+  profile: ClimberProfile,
+  wallAngleDeg = 0
 ): MoveEvaluation {
   if (target.kind === 'dyno') {
-    return evaluateDynoMove(prevAssignment, prevFree, limb, target, holds, profile);
+    return evaluateDynoMove(prevAssignment, prevFree, limb, target, holds, profile, wallAngleDeg);
   }
   const holdMap = buildHoldMap(holds);
   const anatomy = computeAnatomy(profile);
+  const wallPhys = computeWallAnglePhysics(wallAngleDeg);
   const isHand = LIMB_META[limb].isHand;
   const warnings: string[] = [];
 
@@ -728,7 +786,7 @@ export function evaluateMove(
     if (handCrossX > 10) warnings.push('交叉手动作（Cross），注意转髋贴壁');
   }
 
-  // 3. Contact quality
+  // 3. Contact quality (incorporates hold scale, wall tilt overhang/slab, and real finger strength)
   const strengthToWeight = (profile.gripStrength / 92) / Math.pow(anatomy.weightFactor, 0.52);
   let alignment = 0.85;
   let gripScore = 70;
@@ -737,10 +795,18 @@ export function evaluateMove(
 
   if (target.kind === 'hold' && targetHold) {
     const spec = HOLD_SPECS[targetHold.type];
+    const scaleGrip = getHoldScaleGripFactor(targetHold.scale);
     const alignInfo = computeHoldAlignment(targetHold, limb, nextPose);
     alignment = alignInfo.alignment;
-    baseGrip = isHand ? spec.handGrip : spec.footGrip;
-    gripScore = clamp(Math.round(baseGrip * alignment * clamp(strengthToWeight, 0.72, 1.32) * 100), 0, 100);
+    baseGrip = (isHand ? spec.handGrip : spec.footGrip) * scaleGrip;
+    const wallGripFactor = isHand
+      ? wallPhys.handGripMult
+      : clamp(1 - wallPhys.sinOverhang * 0.14 + wallPhys.sinSlab * 0.08, 0.84, 1.06);
+    gripScore = clamp(
+      Math.round(baseGrip * wallGripFactor * alignment * clamp(strengthToWeight, 0.72, 1.78) * 100),
+      0,
+      100
+    );
     staminaMult = spec.staminaMultiplier;
 
     if (isHand && targetHold.type === 'foothold') {
@@ -770,7 +836,7 @@ export function evaluateMove(
           { reachRatio: effectiveReach, reachExcessCm, gripScore, directionAlignment: alignment, staminaCost: 16 }
         );
       }
-      if (gripScore < 28) {
+      if (gripScore < Math.max(28, wallPhys.minHandGripThreshold)) {
         return failEval(
           nextPose,
           `#${targetHold.label} 小脚点抓握面过小，当前指力/体重比难以抠稳（可减轻体重或提高指力）`,
@@ -779,14 +845,37 @@ export function evaluateMove(
       }
       warnings.push(`微抠 #${targetHold.label} 小脚点过渡，指力消耗极大`);
     }
-    if (isHand && alignment < 0.28) {
+    const minAlign = targetHold.type === 'microcrimp' ? 0.36 : 0.28;
+    if (isHand && alignment < minAlign) {
       return failEval(
         nextPose,
         `#${targetHold.label} ${spec.shortZh}发力方向偏离 ${Math.round(alignInfo.angleDiffDeg)}°，手掌打滑脱落`,
         { reachRatio: effectiveReach, reachExcessCm, isDyno, gripScore, directionAlignment: alignment }
       );
     }
-    if (isDyno && baseGrip * alignment < 0.44) {
+    // Realistic steep-overhang & micro-crimp finger-strength gate!
+    if (
+      isHand &&
+      targetHold.type !== 'foothold' &&
+      (wallPhys.angleDeg >= 20 || targetHold.type === 'microcrimp') &&
+      gripScore < wallPhys.minHandGripThreshold
+    ) {
+      const tiltHint =
+        wallPhys.angleDeg >= 20 ? `在 ${wallPhys.angleDeg}° 仰角下` : '';
+      return failEval(
+        nextPose,
+        `${tiltHint}指力不足以抓稳 #${targetHold.label} ${spec.shortZh}（抓握 ${gripScore} < 需求 ${wallPhys.minHandGripThreshold}，可切换高阶体型/提高指力或调缓墙角）`,
+        {
+          reachRatio: effectiveReach,
+          reachExcessCm,
+          isDyno,
+          gripScore,
+          directionAlignment: alignment,
+          staminaCost: 18,
+        }
+      );
+    }
+    if (isDyno && (baseGrip * wallGripFactor * alignment * clamp(strengthToWeight, 0.72, 1.78)) < 0.44) {
       return failEval(nextPose, `动态飞跃未能抓稳 #${targetHold.label}`, {
         reachRatio: effectiveReach,
         reachExcessCm,
@@ -800,8 +889,7 @@ export function evaluateMove(
       warnings.push(`#${targetHold.label} 抓握角度偏斜，握力消耗加剧`);
     }
   } else if (target.kind === 'smear') {
-    // Friction smear: better for feet, weak for hands; needs CoM pressing into wall
-    // Feet: weight pressing down onto smear; Hands: CoM close to contact in X
+    // Friction smear: great on slab, progressively harder on steep overhang
     const lateral = clamp(1 - Math.abs(nextPose.com.x - targetPos.x) / (isHand ? 55 : 75), 0.25, 1);
     const verticalPress = isHand
       ? 0.85
@@ -820,14 +908,14 @@ export function evaluateMove(
     baseGrip = isHand ? 0.28 : 0.58;
     alignment = pressIntoWall * (isHand ? 0.75 : 0.95);
     gripScore = clamp(
-      Math.round(baseGrip * alignment * clamp(strengthToWeight, 0.7, 1.25) * 100),
+      Math.round(baseGrip * wallPhys.smearWallMult * alignment * clamp(strengthToWeight, 0.7, 1.45) * 100),
       0,
       100
     );
     staminaMult = isHand ? 1.55 : 1.15;
     warnings.push(isHand ? '蹭墙摩擦手，仅作短暂过渡' : '踩墙（Smear），靠鞋底摩擦与重心压墙');
     if (gripScore < 16) {
-      return failEval(nextPose, '踩墙/蹭墙摩擦力不足，请把重心更靠近接触点', {
+      return failEval(nextPose, '踩墙/蹭墙摩擦力不足，请把重心更靠近接触点或调缓仰角', {
         reachRatio: effectiveReach,
         reachExcessCm,
         gripScore,
@@ -874,7 +962,10 @@ export function evaluateMove(
     const flagRelief = flagFeet.length > 0 || (target.kind === 'flag' && !isHand) ? 0.22 : remainingFeet.length < 2 ? 0.08 : 0;
 
     barnDoorRisk = clamp(
-      outsideDist / 48 + (sameSide ? 0.32 : 0) + narrowBaseFactor - flagRelief,
+      (outsideDist / 48) * wallPhys.slabBalanceMult +
+        (sameSide ? 0.32 : 0) +
+        narrowBaseFactor -
+        flagRelief,
       0,
       1
     );
@@ -918,13 +1009,14 @@ export function evaluateMove(
   }
   if (nextPose.scrunchPenalty > 0.42) warnings.push('高脚折叠幅度较大，发力较吃力');
 
-  // 6. Stamina
+  // 6. Stamina (overhang multiplies forearm & core tension drain!)
   const footSupportFactor =
     remainingFeet.length >= 2 ? 0.78 : remainingFeet.length === 1 ? 1.0 : 1.75;
   const reachFactor = isDyno ? 1.65 : effectiveReach > 0.9 ? 1.32 : 1.0;
   const alignFactor = 1 + (1 - alignment) * 0.9;
   const scrunchFactor = 1 + nextPose.scrunchPenalty * 0.45;
   const barnDoorFactor = 1 + barnDoorRisk * 0.5;
+  const wallDrainFactor = isHand ? wallPhys.handStaminaMult : wallPhys.footStaminaMult;
   const weightVsGrip = anatomy.weightFactor / (profile.gripStrength / 92);
   const baseCost =
     target.kind === 'flag'
@@ -942,9 +1034,16 @@ export function evaluateMove(
   const staminaCost =
     Math.round(
       clamp(
-        baseCost * footSupportFactor * reachFactor * alignFactor * scrunchFactor * barnDoorFactor * weightVsGrip,
-        2,
-        36
+        baseCost *
+          footSupportFactor *
+          reachFactor *
+          alignFactor *
+          scrunchFactor *
+          barnDoorFactor *
+          wallDrainFactor *
+          weightVsGrip,
+        1.8,
+        38
       ) * 10
     ) / 10;
 
@@ -990,9 +1089,18 @@ export function evaluateHoldMove(
   targetHoldId: string,
   holds: Hold[],
   profile: ClimberProfile,
-  prevFree: FreeLimbMap = emptyFreeMap()
+  prevFree: FreeLimbMap = emptyFreeMap(),
+  wallAngleDeg = 0
 ): MoveEvaluation {
-  return evaluateMove(prevAssignment, prevFree, limb, { kind: 'hold', holdId: targetHoldId }, holds, profile);
+  return evaluateMove(
+    prevAssignment,
+    prevFree,
+    limb,
+    { kind: 'hold', holdId: targetHoldId },
+    holds,
+    profile,
+    wallAngleDeg
+  );
 }
 
 export function isTopReached(assignment: LimbAssignment, holds: Hold[]): boolean {
@@ -1025,7 +1133,8 @@ export function evaluateBetaSequence(
   steps: BetaStep[],
   holds: Hold[],
   profile: ClimberProfile,
-  initialFree: FreeLimbMap = emptyFreeMap()
+  initialFree: FreeLimbMap = emptyFreeMap(),
+  wallAngleDeg = 0
 ): {
   traces: BetaTraceStep[];
   finalAssignment: LimbAssignment;
@@ -1049,7 +1158,7 @@ export function evaluateBetaSequence(
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
-    const evaluation = evaluateMove(current, free, step.limb, step.target, holds, profile);
+    const evaluation = evaluateMove(current, free, step.limb, step.target, holds, profile, wallAngleDeg);
     const applied = applyLimbTarget(current, free, step.limb, step.target, Boolean(evaluation.cutsFeet));
     stamina = Math.max(0, Math.round((stamina - evaluation.staminaCost) * 10) / 10);
     const pumpedOut = stamina <= 0;

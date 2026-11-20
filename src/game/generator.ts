@@ -1,8 +1,26 @@
-import { CLIMBER_PRESETS, computeAnatomy } from './climber';
-import { ALL_LIMBS, getHoldHitRadius, HOLD_COLORS, HOLD_SPECS, LIMB_META, renumberHolds } from './holds';
-import { clamp, dist } from './ik';
+import {
+  CLIMBER_PRESETS,
+  computeAnatomy,
+  getReferenceClimberForGrade,
+} from './climber';
 import { applyLimbTarget, dynoTarget, emptyFreeMap, holdTarget } from './contact';
-import { buildHoldMap, evaluateBetaSequence, evaluateMove, getInitialAssignment, isTopReached } from './physics';
+import {
+  ALL_LIMBS,
+  getHoldHitRadius,
+  getWallAngleLabel,
+  HOLD_COLORS,
+  HOLD_SPECS,
+  LIMB_META,
+  renumberHolds,
+} from './holds';
+import { clamp, dist } from './ik';
+import {
+  buildHoldMap,
+  evaluateBetaSequence,
+  evaluateMove,
+  getInitialAssignment,
+  isTopReached,
+} from './physics';
 import {
   BetaStep,
   ClimberProfile,
@@ -12,6 +30,7 @@ import {
   LimbId,
   LimbTarget,
   RouteProblem,
+  RouteStyle,
   WALL_WIDTH_CM,
 } from './types';
 
@@ -28,6 +47,13 @@ export function nextUid(prefix: string): string {
   uidCounter += 1;
   return `${prefix}-${Date.now().toString(36)}-${uidCounter}`;
 }
+
+export const STYLE_LABELS: Record<RouteStyle, string> = {
+  balanced: '综合均衡',
+  power: '仰角力量',
+  tech: '技术平衡',
+  dyno: '动态协调',
+};
 
 /**
  * Minimum center-to-center clearance (cm) so two holds (including shapes, tapes & badges) never overlap.
@@ -66,12 +92,11 @@ function placeHoldWithoutOverlap(
     return base;
   }
 
-  // Try concentric rings around desired spot to nudge hold into nearest clear space
   const radii = required ? [14, 24, 34, 46, 58] : [14, 24, 34];
   const angles = 12;
   for (const r of radii) {
     for (let k = 0; k < angles; k++) {
-      const ang = (k / angles) * Math.PI * 2 + (r * 0.13);
+      const ang = (k / angles) * Math.PI * 2 + r * 0.13;
       const nx = Math.round(clamp(base.x + Math.cos(ang) * r, minX, maxX));
       const ny = Math.round(clamp(base.y + Math.sin(ang) * r, minY, maxY));
       const trial: Hold = { ...base, x: nx, y: ny };
@@ -86,6 +111,8 @@ function placeHoldWithoutOverlap(
 }
 
 interface GradeBlueprint {
+  wallAngles: number[];
+  styles: RouteStyle[];
   numHands: number;
   minDy: number;
   maxDy: number;
@@ -96,163 +123,260 @@ interface GradeBlueprint {
   startPool: HoldType[];
   topPool: HoldType[];
   twoStartsProb: number;
-  footBonusProb: number; // chance of extra forgiving foothold
+  footBonusProb: number;
   volumeProb: number;
   scaleBase: number;
-  cruxBoostDy: number; // extra crux span injected near upper-mid wall
+  cruxBoostDy: number;
+  cruxCount: number;
 }
 
+/**
+ * Real-world Hueco V1–V11 routesetting blueprints aligned with:
+ * - CWA commercial & competition setting standards
+ * - Kilter / MoonBoard / Tension wall angle progressions
+ * - Lattice Training finger-strength tiers (V1–V7 Standard 92, V8–V9 Adv 132, V10–V11 Pro 154)
+ */
 const GRADE_BLUEPRINTS: Record<number, GradeBlueprint> = {
-  0: {
-    numHands: 6,
-    minDy: 34,
-    maxDy: 44,
-    minDx: 14,
-    maxDx: 34,
-    maxAngle: 0,
-    handPool: ['jug'],
-    startPool: ['jug'],
-    topPool: ['jug'],
-    twoStartsProb: 1.0,
-    footBonusProb: 0.9,
-    volumeProb: 0,
-    scaleBase: 1.22,
-    cruxBoostDy: 0,
-  },
   1: {
+    wallAngles: [0, 5],
+    styles: ['balanced'],
     numHands: 6,
-    minDy: 38,
-    maxDy: 49,
-    minDx: 22,
-    maxDx: 44,
-    maxAngle: 12,
+    minDy: 36,
+    maxDy: 46,
+    minDx: 18,
+    maxDx: 38,
+    maxAngle: 10,
     handPool: ['jug', 'jug', 'jug', 'pinch'],
     startPool: ['jug'],
     topPool: ['jug'],
-    twoStartsProb: 0.95,
-    footBonusProb: 0.78,
-    volumeProb: 0.15,
-    scaleBase: 1.15,
+    twoStartsProb: 1.0,
+    footBonusProb: 0.85,
+    volumeProb: 0.12,
+    scaleBase: 1.18,
     cruxBoostDy: 0,
+    cruxCount: 0,
   },
   2: {
+    wallAngles: [0, 5, 10],
+    styles: ['balanced', 'tech'],
     numHands: 5,
-    minDy: 44,
-    maxDy: 56,
-    minDx: 30,
-    maxDx: 56,
-    maxAngle: 26,
+    minDy: 42,
+    maxDy: 54,
+    minDx: 26,
+    maxDx: 52,
+    maxAngle: 22,
     handPool: ['jug', 'pinch', 'pinch', 'jug'],
     startPool: ['jug', 'pinch'],
     topPool: ['jug'],
-    twoStartsProb: 0.85,
-    footBonusProb: 0.65,
-    volumeProb: 0.3,
-    scaleBase: 1.08,
+    twoStartsProb: 0.88,
+    footBonusProb: 0.7,
+    volumeProb: 0.25,
+    scaleBase: 1.12,
     cruxBoostDy: 4,
+    cruxCount: 1,
   },
   3: {
+    wallAngles: [-5, 0, 10, 15],
+    styles: ['balanced', 'tech', 'power'],
     numHands: 5,
-    minDy: 48,
-    maxDy: 63,
-    minDx: 38,
-    maxDx: 70,
-    maxAngle: 44,
+    minDy: 46,
+    maxDy: 60,
+    minDx: 34,
+    maxDx: 66,
+    maxAngle: 38,
     handPool: ['pinch', 'crimp', 'jug', 'pinch', 'sloper'],
     startPool: ['jug', 'pinch'],
     topPool: ['jug', 'pinch'],
-    twoStartsProb: 0.75,
-    footBonusProb: 0.45,
-    volumeProb: 0.4,
-    scaleBase: 1.02,
-    cruxBoostDy: 10,
+    twoStartsProb: 0.78,
+    footBonusProb: 0.5,
+    volumeProb: 0.35,
+    scaleBase: 1.05,
+    cruxBoostDy: 8,
+    cruxCount: 1,
   },
   4: {
+    wallAngles: [10, 15, 20],
+    styles: ['balanced', 'power', 'tech', 'dyno'],
     numHands: 5,
-    minDy: 52,
-    maxDy: 68,
-    minDx: 44,
-    maxDx: 82,
-    maxAngle: 56,
+    minDy: 50,
+    maxDy: 64,
+    minDx: 40,
+    maxDx: 76,
+    maxAngle: 48,
     handPool: ['crimp', 'pinch', 'sloper', 'crimp'],
     startPool: ['pinch', 'jug'],
     topPool: ['jug', 'pinch'],
-    twoStartsProb: 0.55,
-    footBonusProb: 0.25,
-    volumeProb: 0.38,
-    scaleBase: 0.96,
-    cruxBoostDy: 15,
+    twoStartsProb: 0.62,
+    footBonusProb: 0.34,
+    volumeProb: 0.35,
+    scaleBase: 1.0,
+    cruxBoostDy: 13,
+    cruxCount: 1,
   },
   5: {
+    wallAngles: [-5, 15, 20, 25],
+    styles: ['power', 'tech', 'dyno'],
+    numHands: 4,
+    minDy: 54,
+    maxDy: 70,
+    minDx: 44,
+    maxDx: 84,
+    maxAngle: 56,
+    handPool: ['crimp', 'sloper', 'pinch', 'crimp'],
+    startPool: ['pinch', 'crimp'],
+    topPool: ['pinch', 'jug'],
+    twoStartsProb: 0.52,
+    footBonusProb: 0.24,
+    volumeProb: 0.3,
+    scaleBase: 0.96,
+    cruxBoostDy: 16,
+    cruxCount: 1,
+  },
+  6: {
+    wallAngles: [20, 25, 30],
+    styles: ['power', 'tech', 'dyno'],
+    numHands: 4,
+    minDy: 56,
+    maxDy: 74,
+    minDx: 48,
+    maxDx: 92,
+    maxAngle: 62,
+    handPool: ['crimp', 'sloper', 'crimp', 'pinch'],
+    startPool: ['crimp', 'pinch'],
+    topPool: ['pinch', 'sloper', 'jug'],
+    twoStartsProb: 0.45,
+    footBonusProb: 0.16,
+    volumeProb: 0.25,
+    scaleBase: 0.93,
+    cruxBoostDy: 18,
+    cruxCount: 1,
+  },
+  7: {
+    wallAngles: [20, 25, 30],
+    styles: ['power', 'tech', 'dyno'],
     numHands: 4,
     minDy: 58,
     maxDy: 76,
     minDx: 50,
-    maxDx: 94,
-    maxAngle: 64,
+    maxDx: 96,
+    maxAngle: 68,
     handPool: ['crimp', 'sloper', 'crimp', 'pinch'],
-    startPool: ['pinch', 'crimp'],
-    topPool: ['pinch', 'jug'],
-    twoStartsProb: 0.45,
+    startPool: ['crimp', 'sloper', 'pinch'],
+    topPool: ['sloper', 'pinch', 'crimp'],
+    twoStartsProb: 0.38,
     footBonusProb: 0.14,
-    volumeProb: 0.3,
-    scaleBase: 0.92,
+    volumeProb: 0.2,
+    scaleBase: 0.91,
     cruxBoostDy: 20,
+    cruxCount: 2,
   },
-  6: {
+  // V8–V9: Advanced tier (verified with V9 Climber, grip 132)
+  8: {
+    wallAngles: [35, 40],
+    styles: ['power', 'dyno', 'tech'],
     numHands: 4,
-    minDy: 62,
+    minDy: 58,
+    maxDy: 78,
+    minDx: 52,
+    maxDx: 100,
+    maxAngle: 70,
+    handPool: ['crimp', 'microcrimp', 'sloper', 'crimp'],
+    startPool: ['crimp', 'pinch'],
+    topPool: ['crimp', 'pinch', 'sloper'],
+    twoStartsProb: 0.35,
+    footBonusProb: 0.12,
+    volumeProb: 0.18,
+    scaleBase: 0.89,
+    cruxBoostDy: 20,
+    cruxCount: 2,
+  },
+  9: {
+    wallAngles: [40, 45],
+    styles: ['power', 'dyno'],
+    numHands: 4,
+    minDy: 60,
+    maxDy: 82,
+    minDx: 54,
+    maxDx: 104,
+    maxAngle: 74,
+    handPool: ['microcrimp', 'crimp', 'sloper', 'microcrimp'],
+    startPool: ['crimp', 'microcrimp'],
+    topPool: ['crimp', 'sloper', 'pinch'],
+    twoStartsProb: 0.3,
+    footBonusProb: 0.08,
+    volumeProb: 0.15,
+    scaleBase: 0.86,
+    cruxBoostDy: 22,
+    cruxCount: 2,
+  },
+  // V10–V11: Expert / Pro World-Cup tier (verified with V11 Climber, grip 154)
+  10: {
+    wallAngles: [45, 50],
+    styles: ['power', 'dyno'],
+    numHands: 4,
+    minDy: 60,
     maxDy: 82,
     minDx: 56,
-    maxDx: 104,
-    maxAngle: 72,
-    handPool: ['crimp', 'sloper', 'sloper', 'crimp'],
-    startPool: ['crimp', 'sloper', 'pinch'],
-    topPool: ['pinch', 'sloper', 'jug'],
-    twoStartsProb: 0.35,
-    footBonusProb: 0.08,
-    volumeProb: 0.25,
-    scaleBase: 0.88,
-    cruxBoostDy: 24,
-  },
-  7: {
-    numHands: 4,
-    minDy: 66,
-    maxDy: 88,
-    minDx: 62,
-    maxDx: 112,
-    maxAngle: 80,
-    handPool: ['crimp', 'sloper', 'crimp'],
-    startPool: ['crimp', 'sloper'],
-    topPool: ['sloper', 'pinch', 'crimp'],
+    maxDx: 106,
+    maxAngle: 78,
+    handPool: ['microcrimp', 'sloper', 'microcrimp', 'crimp'],
+    startPool: ['microcrimp', 'crimp'],
+    topPool: ['sloper', 'crimp', 'microcrimp'],
     twoStartsProb: 0.25,
-    footBonusProb: 0.04,
-    volumeProb: 0.2,
+    footBonusProb: 0.06,
+    volumeProb: 0.12,
     scaleBase: 0.84,
-    cruxBoostDy: 28,
+    cruxBoostDy: 24,
+    cruxCount: 2,
+  },
+  11: {
+    wallAngles: [50, 55],
+    styles: ['power', 'dyno'],
+    numHands: 4,
+    minDy: 62,
+    maxDy: 85,
+    minDx: 58,
+    maxDx: 110,
+    maxAngle: 82,
+    handPool: ['microcrimp', 'microcrimp', 'sloper'],
+    startPool: ['microcrimp', 'sloper'],
+    topPool: ['microcrimp', 'sloper', 'crimp'],
+    twoStartsProb: 0.22,
+    footBonusProb: 0.04,
+    volumeProb: 0.1,
+    scaleBase: 0.81,
+    cruxBoostDy: 25,
+    cruxCount: 3,
   },
 };
 
 export interface MeasuredDifficulty {
-  estimatedGrade: number; // 0..7 continuous
+  estimatedGrade: number; // 1.0..11.5 continuous
   staminaSpent: number;
   hardMoves: number;
   dynoMoves: number;
   minGrip: number;
   maxReach: number;
+  cruxStrain: number;
   stepCount: number;
 }
 
 /**
- * Measures the real physical difficulty of a solved route against the standard 172cm climber.
+ * Measures real physical difficulty of a solved route at a specific wall tilt angle.
+ * Follows real Hueco V-scale principles:
+ * 1) Crux-dominant (hardest move + top-2 crux average)
+ * 2) Wall overhang & slab multipliers
+ * 3) Hold positivity / microcrimp density
+ * 4) Required climber strength tier (gripStrength > 92 elevates grade into V8–V11)
  */
 export function measureRouteDifficulty(
   holds: Hold[],
   steps: BetaStep[],
-  profile: ClimberProfile = CLIMBER_PRESETS[1]
+  profile: ClimberProfile = CLIMBER_PRESETS[1],
+  wallAngleDeg = 0
 ): MeasuredDifficulty {
   const init = getInitialAssignment(holds, profile);
-  const seq = evaluateBetaSequence(init, steps, holds, profile);
+  const seq = evaluateBetaSequence(init, steps, holds, profile, emptyFreeMap(), wallAngleDeg);
   const staminaSpent = Math.round(100 - seq.finalStamina);
 
   let hardMoves = 0;
@@ -260,6 +384,7 @@ export function measureRouteDifficulty(
   let minGrip = 100;
   let maxReach = 0;
   let maxBarnDoor = 0;
+  const handStrains: number[] = [];
 
   for (const tr of seq.traces) {
     const ev = tr.evaluation;
@@ -268,73 +393,208 @@ export function measureRouteDifficulty(
     if (LIMB_META[tr.step.limb].isHand) {
       minGrip = Math.min(minGrip, ev.gripScore);
       maxReach = Math.max(maxReach, ev.reachRatio);
+      handStrains.push(ev.staminaCost);
     }
     maxBarnDoor = Math.max(maxBarnDoor, ev.barnDoorRisk);
   }
 
-  // Weighted physical grade score (calibrated so V0~0.4, V3~3.0, V6~6.0, V7~7.0)
-  const staminaTerm = clamp((staminaSpent - 24) / 11.5, 0, 5.2);
-  const hardTerm = Math.min(2.6, hardMoves * 0.65);
-  const dynoTerm = Math.min(2.0, dynoMoves * 1.15);
-  const gripTerm = clamp((88 - minGrip) / 18, 0, 2.2);
-  const reachTerm = clamp((maxReach - 0.78) * 5.2, 0, 1.8);
-  const balanceTerm = clamp((maxBarnDoor - 0.25) * 2.2, 0, 1.0);
+  handStrains.sort((a, b) => b - a);
+  const cruxStrain = handStrains[0] ?? 8;
+  const top2Crux =
+    handStrains.length >= 2 ? (handStrains[0] + handStrains[1]) / 2 : cruxStrain;
+
+  // Intrinsic hold quality (independent of climber strength so high-tier climbers don't deflate hold difficulty)
+  const handHolds = holds.filter((h) => h.type !== 'foothold');
+  const microCount = handHolds.filter((h) => h.type === 'microcrimp').length;
+  const avgHoldHandGrip =
+    handHolds.length > 0
+      ? handHolds.reduce((s, h) => s + HOLD_SPECS[h.type].handGrip, 0) / handHolds.length
+      : 0.85;
+
+  // Component scores calibrated to real V1–V11 progression:
+  const angleTerm =
+    wallAngleDeg >= 0
+      ? clamp((wallAngleDeg / 55) * 4.4, 0, 4.4)
+      : clamp((Math.abs(wallAngleDeg) / 10) * 1.15, 0, 1.15);
+  const holdTerm = clamp((0.96 - avgHoldHandGrip) * 8.2, 0, 3.6) + Math.min(1.4, microCount * 0.45);
+  const cruxTerm = clamp((top2Crux - 7) / 4.2, 0, 3.2);
+  const staminaTerm = clamp((staminaSpent - 22) / 16, 0, 3.0);
+  const hardDynoTerm = Math.min(2.2, hardMoves * 0.35 + dynoMoves * 0.95);
+  const reachTerm = clamp((maxReach - 0.8) * 4.2, 0, 1.3);
+  const balanceTerm = clamp((maxBarnDoor - 0.25) * 2.0, 0, 0.9);
+  // Strength tier compensation: if measured with a stronger climber (grip > 92), their extra strength masked difficulty
+  const strengthBonus = clamp((profile.gripStrength - 92) / 22, 0, 2.9);
 
   const rawGrade =
-    staminaTerm * 0.52 +
-    hardTerm * 0.55 +
-    dynoTerm * 0.6 +
-    gripTerm * 0.55 +
-    reachTerm * 0.45 +
-    balanceTerm * 0.35;
+    0.75 +
+    angleTerm * 0.85 +
+    holdTerm * 0.68 +
+    cruxTerm * 0.48 +
+    staminaTerm * 0.32 +
+    hardDynoTerm * 0.45 +
+    reachTerm * 0.32 +
+    balanceTerm * 0.28 +
+    strengthBonus * 0.68;
 
   return {
-    estimatedGrade: clamp(Math.round(rawGrade * 10) / 10, 0, 7.5),
+    estimatedGrade: clamp(Math.round(rawGrade * 10) / 10, 1.0, 11.5),
     staminaSpent,
     hardMoves,
     dynoMoves,
     minGrip,
     maxReach: Math.round(maxReach * 100) / 100,
+    cruxStrain: Math.round(cruxStrain * 10) / 10,
     stepCount: steps.length,
   };
 }
 
+export interface LiveGradeEstimate {
+  gradeLabel: string; // 'V1'..'V11' or 'V11+'
+  numericGrade: number;
+  requiredTier: 'standard' | 'advanced' | 'pro' | 'extreme';
+  recommendedGrip: number;
+}
+
 /**
- * Generates a realistic, physics-calibrated bouldering route for a target V-grade (0..7).
- * Uses objective 172cm reference grading and selects the candidate whose measured difficulty
- * matches the target V-grade most closely (while guaranteed solvable!).
+ * Kilter-Board style live grader: evaluates a route at any wall tilt angle across
+ * Standard (92) -> V9 Advanced (132) -> V11 Pro (154) tiers to output its real dynamic V-grade!
  */
-export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfile): RouteProblem {
-  const g = clamp(Math.round(gradeNum), 0, 7);
-  const profile = referenceProfile ?? CLIMBER_PRESETS[1]; // Standard 172cm reference
+export function estimateRouteGrade(
+  holds: Hold[],
+  wallAngleDeg: number
+): LiveGradeEstimate {
+  const hasStart = holds.some((h) => h.role === 'start');
+  const hasTop = holds.some((h) => h.role === 'top');
+  if (!hasStart || !hasTop || holds.length < 3) {
+    return { gradeLabel: 'Custom', numericGrade: 1, requiredTier: 'standard', recommendedGrip: 92 };
+  }
+
+  const standard = CLIMBER_PRESETS[1];
+  const advV9 = CLIMBER_PRESETS[5];
+  const proV11 = CLIMBER_PRESETS[6];
+
+  const solStd = suggestBeta(holds, standard, 18, 10, wallAngleDeg);
+  if (solStd.solved) {
+    const m = measureRouteDifficulty(holds, solStd.steps, standard, wallAngleDeg);
+    const g = clamp(Math.round(m.estimatedGrade), 1, 7);
+    return {
+      gradeLabel: `V${g}`,
+      numericGrade: g,
+      requiredTier: 'standard',
+      recommendedGrip: g >= 6 ? 100 : 92,
+    };
+  }
+
+  const solAdv = suggestBeta(holds, advV9, 18, 10, wallAngleDeg);
+  if (solAdv.solved) {
+    const m = measureRouteDifficulty(holds, solAdv.steps, advV9, wallAngleDeg);
+    const g = clamp(Math.round(Math.max(7.6, m.estimatedGrade)), 8, 9);
+    return {
+      gradeLabel: `V${g}`,
+      numericGrade: g,
+      requiredTier: 'advanced',
+      recommendedGrip: 132,
+    };
+  }
+
+  const solPro = suggestBeta(holds, proV11, 18, 10, wallAngleDeg);
+  if (solPro.solved) {
+    const m = measureRouteDifficulty(holds, solPro.steps, proV11, wallAngleDeg);
+    const g = clamp(Math.round(Math.max(9.6, m.estimatedGrade)), 10, 11);
+    return {
+      gradeLabel: `V${g}`,
+      numericGrade: g,
+      requiredTier: 'pro',
+      recommendedGrip: 154,
+    };
+  }
+
+  return {
+    gradeLabel: 'V11+',
+    numericGrade: 12,
+    requiredTier: 'extreme',
+    recommendedGrip: 160,
+  };
+}
+
+/**
+ * Generates a realistic, physics-calibrated bouldering route for any target V-grade (V1..V11).
+ * Incorporates real wall angles, RIC styles, non-overlapping hold placement, and multi-tier verification.
+ */
+export function generateRoute(
+  gradeNum: number,
+  referenceProfile?: ClimberProfile,
+  forcedStyle?: RouteStyle
+): RouteProblem {
+  const g = clamp(Math.round(gradeNum), 1, 11);
+  const profile = referenceProfile ?? getReferenceClimberForGrade(g);
   const bp = GRADE_BLUEPRINTS[g];
+  const style: RouteStyle = forcedStyle ?? pick(bp.styles);
   const colorObj = pick(HOLD_COLORS.slice(0, 5));
   const color = colorObj.hex;
 
+  // Pick a style-appropriate wall angle within the grade's realistic band
+  let chosenWallAngle = pick(bp.wallAngles);
+  if (style === 'tech' && g >= 3 && g <= 7) {
+    chosenWallAngle = Math.random() < 0.5 ? -5 : Math.max(0, bp.wallAngles[0] - 5);
+  } else if (style === 'power' && g >= 4) {
+    chosenWallAngle = bp.wallAngles[bp.wallAngles.length - 1];
+  } else if (style === 'dyno' && g >= 4) {
+    chosenWallAngle = bp.wallAngles[Math.floor(bp.wallAngles.length / 2)];
+  }
+
   const gradeNames: Record<number, string[]> = {
-    0: ['新手阶梯', '大把手入门', '轻松直上'],
-    1: ['平衡漫步', '初阶转角', '热身节奏'],
+    1: ['新手阶梯', '大把手热身', '轻松直上'],
     2: ['对角节拍', '中段换手', '侧身过渡'],
     3: ['侧拉韵律', '折返线路', '重心考题'],
     4: ['指力试炼', '交错谜题', '动态衔接'],
     5: ['大跨距难点', '技术抠点', '边角突破'],
-    6: ['圆弧危机', '精准压重心', '极限平衡'],
-    7: ['冠军定线', '绝壁死点', '大师考题'],
+    6: ['圆弧危机', '精准压重心', '陡壁入门'],
+    7: ['月板前哨', '连续死点', '强张力线'],
+    8: ['40° 月板线', '微抠破局', '爆发核心'],
+    9: ['专家死线', '陡壁微边', '极限协调'],
+    10: ['屋檐微抠', '国家队考题', '零容错线'],
+    11: ['8A 绝壁线', '世界杯决赛', '大师极限'],
   };
 
   let bestHolds: Hold[] = [];
+  let bestWallAngle = chosenWallAngle;
   let bestMetrics: MeasuredDifficulty | null = null;
   let bestScoreError = Infinity;
   const anatomy = computeAnatomy(profile);
 
-  // Sample up to 8 fast candidates and pick the solvable route closest to target V-grade!
-  const maxAttempts = g >= 5 ? 8 : 6;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  const baseAttempts = g >= 8 ? 10 : g >= 5 ? 8 : 6;
+  const hardCapAttempts = 20;
+  for (let attempt = 0; attempt < hardCapAttempts; attempt++) {
+    // Stop once we have finished the normal sampling budget AND found at least one verified solvable route
+    if (attempt >= baseAttempts && bestMetrics !== null) break;
+    const isRecoveryPass = attempt >= baseAttempts;
     const holds: Hold[] = [];
+    const trialAngle =
+      attempt === 0
+        ? chosenWallAngle
+        : isRecoveryPass
+          ? bp.wallAngles[0]
+          : pick(bp.wallAngles);
+
+    // Style-tuned hold pool (only use microcrimps on V8+ overhangs or V7 low-angle tech slabs)
+    const styleHandPool: HoldType[] = isRecoveryPass
+      ? g >= 8
+        ? ['crimp', 'pinch', 'microcrimp', 'crimp']
+        : ['crimp', 'pinch', 'sloper', 'crimp']
+      : style === 'tech'
+        ? g >= 8 || (g === 7 && trialAngle <= 10)
+          ? ['sloper', 'crimp', 'microcrimp', 'sloper']
+          : ['sloper', 'crimp', 'pinch', 'sloper']
+        : style === 'dyno'
+          ? g >= 8
+            ? ['crimp', 'pinch', 'crimp', 'microcrimp']
+            : ['pinch', 'crimp', 'jug', 'pinch']
+          : bp.handPool;
 
     // Start zone
     const startX = rand(110, 290);
-    const startY = g >= 5 ? rand(108, 126) : rand(120, 138);
+    const startY = g >= 6 ? rand(104, 124) : rand(118, 138);
     const twoStarts = Math.random() < bp.twoStartsProb;
 
     if (twoStarts) {
@@ -348,12 +608,12 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
           y: startY,
           type: pick(bp.startPool),
           role: 'start',
-          angle: g <= 1 ? 0 : Math.round(rand(-bp.maxAngle * 0.45, 5)),
-          scale: clamp(bp.scaleBase, 0.85, 1.24),
+          angle: g <= 1 ? 0 : Math.round(rand(-bp.maxAngle * 0.42, 6)),
+          scale: clamp(bp.scaleBase, 0.82, 1.24),
           color,
         },
         true,
-        { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: 104, maxY: 155 }
+        { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: 102, maxY: 155 }
       );
       placeHoldWithoutOverlap(
         holds,
@@ -364,12 +624,12 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
           y: startY + rand(-6, 10),
           type: pick(bp.startPool),
           role: 'start',
-          angle: g <= 1 ? 0 : Math.round(rand(-5, bp.maxAngle * 0.45)),
-          scale: clamp(bp.scaleBase, 0.85, 1.24),
+          angle: g <= 1 ? 0 : Math.round(rand(-6, bp.maxAngle * 0.42)),
+          scale: clamp(bp.scaleBase, 0.82, 1.24),
           color,
         },
         true,
-        { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: 104, maxY: 155 }
+        { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: 102, maxY: 155 }
       );
     } else {
       placeHoldWithoutOverlap(
@@ -382,16 +642,16 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
           type: pick(bp.startPool),
           role: 'start',
           angle: g <= 2 ? 0 : Math.round(rand(-15, 15)),
-          scale: clamp(bp.scaleBase, 0.88, 1.18),
+          scale: clamp(bp.scaleBase, 0.84, 1.18),
           color,
         },
         true,
-        { minX: 52, maxX: WALL_WIDTH_CM - 52, minY: 106, maxY: 150 }
+        { minX: 52, maxX: WALL_WIDTH_CM - 52, minY: 104, maxY: 150 }
       );
     }
 
     // Starting footholds
-    const startFootY = g >= 5 ? rand(30, 44) : rand(40, 58);
+    const startFootY = g >= 6 ? rand(30, 44) : rand(40, 58);
     placeHoldWithoutOverlap(
       holds,
       {
@@ -402,7 +662,7 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
         type: 'foothold',
         role: 'normal',
         angle: 0,
-        scale: clamp(bp.scaleBase * 0.96, 0.84, 1.18),
+        scale: clamp(bp.scaleBase * 0.96, 0.8, 1.18),
         color,
       },
       true,
@@ -418,39 +678,50 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
         type: 'foothold',
         role: 'normal',
         angle: 0,
-        scale: clamp(bp.scaleBase * 0.96, 0.84, 1.18),
+        scale: clamp(bp.scaleBase * 0.96, 0.8, 1.18),
         color,
       },
       true,
       { minX: 38, maxX: WALL_WIDTH_CM - 38, minY: 28, maxY: 82 }
     );
 
-    // Build upward progression with grade-appropriate spacing, crux, and footholds
+    // Upward progression with grade-appropriate spacing, crux count, and footholds
     let prevX = startX;
     let prevY = startY;
     let dir = startX > WALL_WIDTH_CM / 2 ? -1 : 1;
-    const cruxIdx = Math.max(1, Math.floor(bp.numHands / 2));
+    const firstCrux = Math.max(1, Math.floor(bp.numHands / 2) - (bp.cruxCount >= 2 ? 1 : 0));
 
     for (let i = 0; i < bp.numHands; i++) {
-      const isCrux = i === cruxIdx && bp.cruxBoostDy > 0;
-      const stepDy = rand(bp.minDy, bp.maxDy) + (isCrux ? bp.cruxBoostDy : 0);
+      const isCrux = bp.cruxCount > 0 && i >= firstCrux && i < firstCrux + bp.cruxCount;
+      const easeFactor = isRecoveryPass ? 0.86 : 1.0;
+      const dynoExtra = style === 'dyno' && isCrux && !isRecoveryPass ? 8 : 0;
+      const stepDy =
+        (rand(bp.minDy, bp.maxDy) + (isCrux ? bp.cruxBoostDy * (i === firstCrux ? 0.9 : 0.55) : 0)) *
+          easeFactor +
+        dynoExtra;
       const targetY = clamp(prevY + stepDy, prevY + 34, 344);
 
       if (Math.random() < (g <= 1 ? 0.55 : 0.78)) dir *= -1;
-      let targetX = prevX + dir * rand(bp.minDx, bp.maxDx);
+      let targetX = prevX + dir * rand(bp.minDx, bp.maxDx * easeFactor);
       if (targetX < 56 || targetX > WALL_WIDTH_CM - 56) {
         dir *= -1;
-        targetX = clamp(prevX + dir * rand(bp.minDx, bp.maxDx * 0.88), 56, WALL_WIDTH_CM - 56);
+        targetX = clamp(prevX + dir * rand(bp.minDx, bp.maxDx * 0.85 * easeFactor), 56, WALL_WIDTH_CM - 56);
       }
 
-      const type = pick(bp.handPool);
+      let type: HoldType = pick(styleHandPool);
+      // Guarantee at least one iconic microcrimp crux on V8–V11 power/balanced lines!
+      if (isCrux && g >= 8 && style !== 'dyno' && i === firstCrux) {
+        type = 'microcrimp';
+      }
+
       let angle = 0;
       if (bp.maxAngle > 0) {
-        if (type === 'sloper') {
-          angle = Math.round(rand(-Math.min(34, bp.maxAngle * 0.55), Math.min(34, bp.maxAngle * 0.55)));
+        if (type === 'sloper' || type === 'microcrimp') {
+          const cap = type === 'microcrimp' ? 28 : 34;
+          angle = Math.round(rand(-Math.min(cap, bp.maxAngle * 0.45), Math.min(cap, bp.maxAngle * 0.45)));
         } else {
           const bias = targetX > prevX ? 1 : -1;
-          angle = Math.round(bias * rand(bp.maxAngle * 0.32, bp.maxAngle));
+          angle = Math.round(bias * rand(bp.maxAngle * 0.3, bp.maxAngle));
         }
       }
 
@@ -464,7 +735,7 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
           type,
           role: 'normal',
           angle,
-          scale: clamp(bp.scaleBase + rand(-0.06, 0.06), 0.78, 1.24),
+          scale: clamp(bp.scaleBase + rand(-0.05, 0.05), 0.76, 1.24),
           color,
         },
         true,
@@ -472,7 +743,6 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
       );
       if (!placedHand) continue;
 
-      // Primary foothold below this move (lower & slightly farther on higher grades!)
       const footDropMin = anatomy.heightCm * (g <= 2 ? 0.4 : 0.47);
       const footDropMax = anatomy.heightCm * (g <= 2 ? 0.52 : 0.62);
       const footY = clamp(placedHand.y - rand(footDropMin, footDropMax), 66, placedHand.y - 46);
@@ -489,7 +759,7 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
           type: useVolume ? 'volume' : 'foothold',
           role: 'normal',
           angle: useVolume ? Math.round(rand(-14, 14)) : 0,
-          scale: useVolume ? 1.0 : clamp(bp.scaleBase * 0.94, 0.82, 1.15),
+          scale: useVolume ? 1.0 : clamp(bp.scaleBase * 0.94, 0.8, 1.15),
           color: useVolume ? '#3D434C' : color,
         },
         false,
@@ -515,8 +785,7 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
         );
       }
 
-      // Bonus opposite foothold — abundant on V0–V2, rare on V5–V7!
-      if (Math.random() < bp.footBonusProb) {
+      if (isRecoveryPass || Math.random() < bp.footBonusProb) {
         const oppFootX = clamp(placedHand.x - dir * rand(28, 60), 44, WALL_WIDTH_CM - 44);
         const oppFootY = clamp(footY + rand(12, 36), 78, placedHand.y - 40);
         placeHoldWithoutOverlap(
@@ -529,7 +798,7 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
             type: 'foothold',
             role: 'normal',
             angle: 0,
-            scale: clamp(bp.scaleBase * 0.92, 0.84, 1.12),
+            scale: clamp(bp.scaleBase * 0.92, 0.82, 1.12),
             color,
           },
           false,
@@ -543,7 +812,7 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
     }
 
     // Top hold
-    const topMaxDx = g <= 1 ? 30 : g <= 3 ? 52 : 68;
+    const topMaxDx = g <= 1 ? 30 : g <= 4 ? 52 : 68;
     const topX = clamp(prevX + rand(-topMaxDx, topMaxDx), 74, WALL_WIDTH_CM - 74);
     const topY = clamp(
       Math.max(prevY + rand(bp.minDy, bp.maxDy + 6), g <= 1 ? 364 : 378),
@@ -559,20 +828,19 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
         y: topY,
         type: pick(bp.topPool),
         role: 'top',
-        angle: g >= 6 ? Math.round(rand(-18, 18)) : 0,
-        scale: clamp(bp.scaleBase + 0.08, 0.92, 1.26),
+        angle: g >= 7 ? Math.round(rand(-18, 18)) : 0,
+        scale: clamp(bp.scaleBase + 0.08, 0.86, 1.26),
         color,
       },
       true,
       { minX: 60, maxX: WALL_WIDTH_CM - 60, minY: 358, maxY: 416 }
     );
 
-    // High foothold for topping out
     const refTopX = placedTop?.x ?? topX;
     const refTopY = placedTop?.y ?? topY;
     const highFootX = clamp(refTopX + rand(-46, 46), 54, WALL_WIDTH_CM - 54);
     const highFootY = clamp(
-      refTopY - rand(g <= 2 ? 98 : 114, g <= 2 ? 126 : 148),
+      refTopY - rand(g <= 2 ? 98 : 112, g <= 2 ? 124 : 144),
       210,
       305
     );
@@ -586,7 +854,7 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
         type: 'foothold',
         role: 'normal',
         angle: 0,
-        scale: clamp(bp.scaleBase * 0.94, 0.84, 1.12),
+        scale: clamp(bp.scaleBase * 0.94, 0.82, 1.12),
         color,
       },
       false,
@@ -594,49 +862,62 @@ export function generateRoute(gradeNum: number, referenceProfile?: ClimberProfil
     );
 
     const numbered = renumberHolds(holds);
-    if (bestHolds.length === 0) bestHolds = numbered;
+    if (bestHolds.length === 0) {
+      bestHolds = numbered;
+      bestWallAngle = trialAngle;
+    }
 
-    // Verify solvability AND measure actual physical difficulty (fast beamWidth=12 for mobile speed!)
-    const sol = suggestBeta(numbered, profile, 18, 12);
+    // Verify solvability against the grade's reference climber at trialAngle!
+    const sol = suggestBeta(numbered, profile, 18, 12, trialAngle);
     if (!sol.solved) continue;
 
-    const metrics = measureRouteDifficulty(numbered, sol.steps, profile);
-    // Reject easy routes masquerading as V5+ or brutal routes masquerading as V0–V1
+    const metrics = measureRouteDifficulty(numbered, sol.steps, profile, trialAngle);
     let err = Math.abs(metrics.estimatedGrade - g);
-    if (g <= 1 && (metrics.dynoMoves > 0 || metrics.hardMoves > g)) err += 2.5;
-    if (g >= 5 && metrics.hardMoves + metrics.dynoMoves === 0) err += 2.5;
-    if (g >= 6 && metrics.staminaSpent < 45) err += 2.0;
+    if (g <= 2 && (metrics.dynoMoves > 0 || metrics.hardMoves > g)) err += 2.5;
+    if (g >= 6 && metrics.hardMoves + metrics.dynoMoves === 0) err += 2.2;
+    // For V8+, prefer routes that truly challenge standard (92) climbers!
+    if (g >= 8) {
+      const stdTry = suggestBeta(numbered, CLIMBER_PRESETS[1], 14, 8, trialAngle);
+      if (stdTry.solved) err += 2.8;
+    }
 
     if (err < bestScoreError) {
       bestScoreError = err;
       bestHolds = numbered;
+      bestWallAngle = trialAngle;
       bestMetrics = metrics;
-      // Early exit as soon as we hit a great calibrated match!
-      if (err <= 0.85) break;
+      if (err <= 0.9) break;
     }
   }
 
   const baseDesc: Record<number, string> = {
-    0: '纯大把手与密脚点入门线，跨距轻松无难点。',
-    1: '基础大把手节奏线，练习顺畅换脚与重心转移。',
-    2: '把手与捏点交替的轻斜线，考验基础脚法。',
-    3: '引入侧拉点与折返路线，注意对侧脚防开门。',
-    4: '抠点/圆弧与中大跨距难点，需合理分配体能。',
-    5: '稀疏脚点与技术方向点，身型与高脚策略差异显著。',
-    6: '高难圆弧与小抠点组合，重心压墙与角度容错极低。',
-    7: '极限定线：稀疏小点 + 大跨距难点，极度考验指力或动态飞跃！',
+    1: '大把手与充裕脚点热身线，练习节奏换脚与重心移动。',
+    2: '把手与捏点交替的初阶斜线，培养基础脚法意识。',
+    3: '引入侧拉点与轻仰角折返，注意对侧脚 Flag 防开门。',
+    4: '进阶分水岭：抠点/圆弧与力量核心开始成为硬门槛。',
+    5: '中仰角技术线，圆弧压重心与精准步序缺一不可。',
+    6: '告别大把手：陡壁抠点与连续重心控制，考验指力与张力。',
+    7: '高阶强张力线：出现微抠点与大跨距死点/飞跃难点。',
+    8: '40° 级高阶力量线（推荐指力 ≥ 132）：微抠点 + 陡仰角强核心。',
+    9: '专家级陡壁考题（推荐「V9 进阶高手」）：多步高强度 Crux。',
+    10: '准职业屋檐线（推荐「V11 世界杯选手」）：极陡仰角 + 6–10mm 微抠点。',
+    11: '8A 职业级绝壁（推荐「V11 世界杯选手」）：极限仰角、微抠与零容错连续难点！',
   };
 
+  const angleNote = getWallAngleLabel(bestWallAngle);
+  const styleNote = STYLE_LABELS[style];
   const telemetryNote = bestMetrics
-    ? `（参考：${bestMetrics.stepCount}步 · 耗能${bestMetrics.staminaSpent}% · 难点${bestMetrics.hardMoves}步${
+    ? ` [${angleNote} · ${styleNote} · ${bestMetrics.stepCount}步 · 耗能${bestMetrics.staminaSpent}%${
         bestMetrics.dynoMoves > 0 ? ` · 飞跃${bestMetrics.dynoMoves}次` : ''
-      }）`
-    : '';
+      }]`
+    : ` [${angleNote} · ${styleNote}]`;
 
   return {
     id: nextUid('route'),
-    name: `${pick(gradeNames[g])}`,
+    name: pick(gradeNames[g]),
     grade: `V${g}`,
+    wallAngleDeg: bestWallAngle,
+    style,
     description: `${baseDesc[g]}${telemetryNote}`,
     holdColor: color,
     holds: bestHolds,
@@ -653,13 +934,14 @@ interface SearchNode {
 
 /**
  * Beam-search Beta solver that computes a valid, human-like Beta sequence
- * specifically tailored to the current climber's height, ape index, grip, and flexibility!
+ * specifically tailored to the current climber's height, ape index, grip, flexibility, and wall tilt!
  */
 export function suggestBeta(
   holds: Hold[],
   profile: ClimberProfile,
   maxDepth = 20,
-  beamWidth = 24
+  beamWidth = 24,
+  wallAngleDeg = 0
 ): { solved: boolean; steps: BetaStep[]; bestProgressY: number } {
   const topHolds = holds.filter((h) => h.role === 'top');
   if (topHolds.length === 0 || holds.length < 2) {
@@ -694,7 +976,6 @@ export function suggestBeta(
       (a.lh && topHolds.some((t) => t.id === a.lh) ? 90 : 0) +
       (a.rh && topHolds.some((t) => t.id === a.rh) ? 90 : 0);
 
-    // Prefer moving hands closer to Top, bringing feet up beneath hands, conserving stamina, fewer wasted steps
     const footFollowBonus = clamp(footAvgY - (handMaxY - 170), -90, 45) * 0.45;
     return -avgHandDist * 1.15 + topBonus + footFollowBonus + stamina * 0.85 - stepCount * 4.5;
   };
@@ -727,23 +1008,17 @@ export function suggestBeta(
         const currentHoldId = node.assignment[limb];
         const currentHold = currentHoldId ? holdMap.get(currentHoldId) : undefined;
 
-        // Filter plausible target holds to keep search blazingly fast (<15ms)
         const candidates = holds.filter((h) => {
           if (h.id === currentHoldId) return false;
           if (isHand) {
             if (h.type === 'foothold') return false;
-            // Hands generally progress upward or toward top
             if (currentHold && h.y < currentHold.y - 35) return false;
-            // Don't move a hand already on Top away from Top
             if (currentHold?.role === 'top') return false;
           } else {
-            // Feet shouldn't go way above hands or drop significantly backward
             if (h.y > maxHandY - 12) return false;
             if (currentHold && h.y < currentHold.y - 25) return false;
-            // Avoid both feet crowding the same tiny foothold unless necessary
             const otherFootId = limb === 'lf' ? node.assignment.rf : node.assignment.lf;
             if (otherFootId === h.id && HOLD_SPECS[h.type].baseRadiusCm < 12) return false;
-            // Strictly prevent left foot stepping past right foot (no leg pass-through)
             const otherFootHold = otherFootId ? holdMap.get(otherFootId) : undefined;
             if (otherFootHold) {
               if (limb === 'lf' && h.x > otherFootHold.x + 4) return false;
@@ -756,22 +1031,35 @@ export function suggestBeta(
         for (const target of candidates) {
           const freeMap = emptyFreeMap();
           const candidatesTargets: LimbTarget[] = [holdTarget(target.id)];
-          // For hands on catchable holds above current stance, also allow explicit Single/Double Dyno!
           if (isHand && target.y > maxHandY + 12) {
             candidatesTargets.push(dynoTarget(target.id, false));
             if (limb === 'rh') {
-              // Only evaluate Double Dyno once per hold per node
               candidatesTargets.push(dynoTarget(target.id, true));
             }
           }
 
           for (const limbTarget of candidatesTargets) {
-            const ev = evaluateMove(node.assignment, freeMap, limb, limbTarget, holds, profile);
+            const ev = evaluateMove(
+              node.assignment,
+              freeMap,
+              limb,
+              limbTarget,
+              holds,
+              profile,
+              wallAngleDeg
+            );
             if (!ev.feasible) continue;
 
-            // Skip explicit dyno if static hold already worked cleanly for the same hold
             if (limbTarget.kind === 'dyno' && !limbTarget.bothHands) {
-              const staticEv = evaluateMove(node.assignment, freeMap, limb, holdTarget(target.id), holds, profile);
+              const staticEv = evaluateMove(
+                node.assignment,
+                freeMap,
+                limb,
+                holdTarget(target.id),
+                holds,
+                profile,
+                wallAngleDeg
+              );
               if (staticEv.feasible) continue;
             }
 

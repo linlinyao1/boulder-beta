@@ -1,8 +1,16 @@
 import './style.css';
-import { CLIMBER_PRESETS, computeAnatomy } from './game/climber';
+import { CLIMBER_PRESETS, computeAnatomy, getGripTierHint } from './game/climber';
 import { targetLabel } from './game/contact';
 import { BoulderEngine, EngineSnapshot } from './game/engine';
-import { ALL_LIMBS, HOLD_COLORS, HOLD_SPECS, LIMB_META } from './game/holds';
+import { STYLE_LABELS } from './game/generator';
+import {
+  ALL_LIMBS,
+  getGradeTierColor,
+  getWallAngleLabel,
+  HOLD_COLORS,
+  HOLD_SPECS,
+  LIMB_META,
+} from './game/holds';
 import { PRESET_ROUTES } from './game/presets';
 import { HoldRole, HoldType, PlanContactMode } from './game/types';
 
@@ -42,15 +50,18 @@ app.innerHTML = `
         </select>
 
         <div class="gen-inline">
-          <select id="ui-gen-grade" class="select-input" title="选择随机生成难度">
-            <option value="0">V0 入门</option>
-            <option value="1">V1 简单</option>
-            <option value="2">V2 初阶</option>
-            <option value="3" selected>V3 中阶</option>
-            <option value="4">V4 进阶</option>
-            <option value="5">V5 困难</option>
-            <option value="6">V6 高难</option>
-            <option value="7">V7 极限</option>
+          <select id="ui-gen-grade" class="select-input" title="选择随机生成难度 (V1–V11)">
+            <option value="1">V1 入门 · 大把手</option>
+            <option value="2">V2 初阶 · 节奏</option>
+            <option value="3" selected>V3 进阶 · 侧拉</option>
+            <option value="4">V4 进阶 · 力量门槛</option>
+            <option value="5">V5 中高 · 技术抠点</option>
+            <option value="6">V6 高阶 · 陡壁圆弧</option>
+            <option value="7">V7 高阶 · 强张力</option>
+            <option value="8">V8 专家 · 40°月板</option>
+            <option value="9">V9 专家 · 陡壁微抠</option>
+            <option value="10">V10 职业 · 50°屋檐</option>
+            <option value="11">V11 极限 · 8A绝壁</option>
           </select>
           <button id="ui-gen-btn" class="btn btn-sm btn-primary">随机生成</button>
         </div>
@@ -84,6 +95,32 @@ app.innerHTML = `
         <!-- Mobile Route Switcher & Generator Section (only shown in mobile 'route' sheet) -->
         <section class="sidebar-section mobile-route-section" id="ui-mobile-route-section">
           <div class="section-head">
+            <div class="section-title">墙面倾角（Kilter 模式）</div>
+            <span id="mb-angle-readout" class="section-sub mono">0° 直壁</span>
+          </div>
+          <div class="kilter-slider-wrap" style="margin-bottom:14px;">
+            <input id="mb-wall-angle" type="range" min="-10" max="55" step="5" value="0" />
+            <div class="angle-chip-row" id="mb-angle-chips">
+              ${[-5, 0, 15, 30, 40, 50]
+                .map((deg) => `<button class="angle-chip" data-set-angle="${deg}">${deg}°</button>`)
+                .join('')}
+            </div>
+          </div>
+
+          <div class="section-head">
+            <div class="section-title">随机生成难度 (V1–V11)</div>
+            <span class="section-sub">点击立即生成</span>
+          </div>
+          <div class="mobile-grade-grid" id="mb-grade-grid">
+            ${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+              .map(
+                (g) =>
+                  `<button class="btn btn-sm grade-btn-tier" data-mb-grade="${g}" style="border-left:3px solid ${getGradeTierColor(`V${g}`)};">V${g}</button>`
+              )
+              .join('')}
+          </div>
+
+          <div class="section-head" style="margin-top:14px;">
             <div class="section-title">经典预设线路</div>
             <button id="mb-clear-wall" class="btn btn-sm">清空自定线</button>
           </div>
@@ -91,19 +128,29 @@ app.innerHTML = `
             ${PRESET_ROUTES.map(
               (r, idx) => `
               <button class="preset-chip" data-mb-preset="${idx}">
-                <span class="preset-chip-name">${r.grade} · ${r.name}</span>
-                <span class="preset-chip-meta">${r.description.slice(0, 26)}…</span>
+                <span class="preset-chip-name">${r.grade} · ${r.name} <span class="mono" style="opacity:0.65;font-weight:500;">(${r.wallAngleDeg}°)</span></span>
+                <span class="preset-chip-meta">${r.description.slice(0, 28)}…</span>
               </button>`
             ).join('')}
           </div>
-          <div class="section-head" style="margin-top:14px;">
-            <div class="section-title">随机生成难度线路</div>
-            <span class="section-sub">点击难度立即生成</span>
+        </section>
+
+        <!-- Desktop Kilter Wall Angle Control -->
+        <section class="sidebar-section desktop-angle-section" id="ui-angle-section">
+          <div class="section-head" style="margin-bottom:6px;">
+            <div>
+              <div class="section-title">墙面倾角 · Kilter 板</div>
+              <div id="ui-angle-sub" class="section-sub mono">0° 直壁 · 综合均衡</div>
+            </div>
+            <span id="ui-live-grade-badge" class="grade-pill">V1</span>
           </div>
-          <div class="mobile-grade-grid" id="mb-grade-grid">
-            ${[0, 1, 2, 3, 4, 5, 6, 7]
-              .map((g) => `<button class="btn btn-sm" data-mb-grade="${g}">V${g}</button>`)
-              .join('')}
+          <div class="kilter-slider-wrap">
+            <input id="sl-wall-angle" type="range" min="-10" max="55" step="5" value="0" />
+            <div class="angle-chip-row" id="ui-angle-chips">
+              ${[-5, 0, 15, 30, 40, 50]
+                .map((deg) => `<button class="angle-chip" data-set-angle="${deg}">${deg}°</button>`)
+                .join('')}
+            </div>
           </div>
         </section>
 
@@ -147,9 +194,9 @@ app.innerHTML = `
               <label class="slider-row">
                 <div class="slider-label-row">
                   <span>指力与握力 (Grip)</span>
-                  <span id="val-grip" class="slider-val">92</span>
+                  <span id="val-grip" class="slider-val">92 · V4–V7 级</span>
                 </div>
-                <input id="sl-grip" type="range" min="65" max="120" step="1" value="92" />
+                <input id="sl-grip" type="range" min="65" max="160" step="1" value="92" />
               </label>
 
               <label class="slider-row">
@@ -157,7 +204,7 @@ app.innerHTML = `
                   <span>髋部柔韧度 (Flexibility)</span>
                   <span id="val-flex" class="slider-val">92</span>
                 </div>
-                <input id="sl-flex" type="range" min="65" max="120" step="1" value="92" />
+                <input id="sl-flex" type="range" min="65" max="135" step="1" value="92" />
               </label>
             </div>
 
@@ -194,6 +241,11 @@ const mbSheetClose = document.querySelector<HTMLButtonElement>('#mb-sheet-close'
 const mbClearWall = document.querySelector<HTMLButtonElement>('#mb-clear-wall')!;
 const mbPresetList = document.querySelector<HTMLDivElement>('#mb-preset-list')!;
 const mbGradeGrid = document.querySelector<HTMLDivElement>('#mb-grade-grid')!;
+const slWallAngle = document.querySelector<HTMLInputElement>('#sl-wall-angle')!;
+const mbWallAngle = document.querySelector<HTMLInputElement>('#mb-wall-angle')!;
+const uiAngleSub = document.querySelector<HTMLDivElement>('#ui-angle-sub')!;
+const mbAngleReadout = document.querySelector<HTMLSpanElement>('#mb-angle-readout')!;
+const uiLiveGradeBadge = document.querySelector<HTMLSpanElement>('#ui-live-grade-badge')!;
 
 type MobileSheetMode = 'none' | 'body' | 'route' | 'panel';
 let mobileSheet: MobileSheetMode = 'none';
@@ -301,6 +353,19 @@ mbGradeGrid.addEventListener('click', (e) => {
   setMobileSheet('none');
 });
 
+// Kilter wall-angle sliders & quick-angle chips
+slWallAngle.addEventListener('input', () => {
+  engine.setWallAngle(Number(slWallAngle.value));
+});
+mbWallAngle.addEventListener('input', () => {
+  engine.setWallAngle(Number(mbWallAngle.value));
+});
+document.querySelectorAll<HTMLButtonElement>('[data-set-angle]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    engine.setWallAngle(Number(btn.dataset.setAngle));
+  });
+});
+
 // Body controls events
 bodyCollapseBtn.addEventListener('click', () => {
   bodyCollapsed = !bodyCollapsed;
@@ -373,17 +438,32 @@ window.addEventListener('keydown', (e) => {
 
 function syncUI(snap: EngineSnapshot): void {
   // Top bar
+  const gradeColor = getGradeTierColor(snap.routeGrade);
   gradePill.textContent = snap.routeGrade;
+  gradePill.style.background = gradeColor;
   routeTitle.textContent = snap.routeName;
   document.querySelectorAll<HTMLButtonElement>('.mode-tab').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.mode === snap.mode);
+  });
+
+  // Wall tilt Kilter controls sync
+  const angleLabel = getWallAngleLabel(snap.wallAngleDeg);
+  const styleLabel = STYLE_LABELS[snap.routeStyle];
+  if (document.activeElement !== slWallAngle) slWallAngle.value = String(snap.wallAngleDeg);
+  if (document.activeElement !== mbWallAngle) mbWallAngle.value = String(snap.wallAngleDeg);
+  uiAngleSub.textContent = `${angleLabel} · ${styleLabel}`;
+  mbAngleReadout.textContent = `${angleLabel} (${snap.routeGrade})`;
+  uiLiveGradeBadge.textContent = snap.routeGrade;
+  uiLiveGradeBadge.style.background = gradeColor;
+  document.querySelectorAll<HTMLButtonElement>('[data-set-angle]').forEach((btn) => {
+    btn.classList.toggle('active', Number(btn.dataset.setAngle) === snap.wallAngleDeg);
   });
 
   // Body controls sync (preserve focus while dragging range inputs)
   const p = snap.profile;
   const anat = computeAnatomy(p);
   const apeSign = p.apeIndexCm >= 0 ? '+' : '';
-  bodySummary.textContent = `${p.heightCm}cm · 臂展 ${anat.wingspanCm}cm (${apeSign}${p.apeIndexCm})`;
+  bodySummary.textContent = `${p.heightCm}cm · 臂展 ${anat.wingspanCm}cm (${apeSign}${p.apeIndexCm}) · 指力${p.gripStrength}`;
 
   if (document.activeElement !== slHeight) slHeight.value = String(p.heightCm);
   if (document.activeElement !== slApe) slApe.value = String(p.apeIndexCm);
@@ -392,7 +472,7 @@ function syncUI(snap: EngineSnapshot): void {
 
   valHeight.textContent = `${p.heightCm} cm`;
   valApe.textContent = `${apeSign}${p.apeIndexCm} cm`;
-  valGrip.textContent = `${p.gripStrength}`;
+  valGrip.textContent = `${p.gripStrength} · ${getGripTierHint(p.gripStrength)}`;
   valFlex.textContent = `${p.flexibility}`;
 
   bodyPresetsWrap.querySelectorAll<HTMLButtonElement>('.preset-chip').forEach((chip, i) => {
@@ -415,7 +495,7 @@ function syncUI(snap: EngineSnapshot): void {
   renderStageBottomPill(snap);
   renderResultOverlay(snap);
   renderMobilePad(snap);
-  mbRouteBtn.textContent = `${snap.routeGrade} ▾`;
+  mbRouteBtn.textContent = `${snap.routeGrade}·${snap.wallAngleDeg}° ▾`;
   mbBodyBtn.textContent = `${snap.profile.heightCm}cm`;
   if (snap.cameraZoom > 1.04) {
     zoomResetBtn.classList.remove('hidden');
@@ -498,10 +578,14 @@ function renderMobilePad(snap: EngineSnapshot): void {
     const topCount = snap.holds.filter((h) => h.role === 'top').length;
 
     mobilePad.innerHTML = `
-      <div class="mp-row mp-grid-6">
+      <div class="mp-row mp-grid-7">
         ${(Object.keys(HOLD_SPECS) as HoldType[])
           .map((t) => {
-            const shortLabel = HOLD_SPECS[t].shortZh.replace('大', '');
+            const shortLabel = HOLD_SPECS[t].shortZh
+              .replace('大把手', '把手')
+              .replace('大造型', '造型')
+              .replace('微抠点', '微抠')
+              .replace('圆弧点', '圆弧');
             return `<button class="mp-btn ${activeType === t ? 'active' : ''}" data-mp-htype="${t}">${shortLabel}</button>`;
           })
           .join('')}
@@ -980,6 +1064,11 @@ function renderPlanPanel(snap: EngineSnapshot): void {
     }
   }
 
+  const needStrongerClimber =
+    snap.liveGradeEstimate.recommendedGrip > snap.profile.gripStrength + 14;
+  const targetPresetIdx = snap.liveGradeEstimate.recommendedGrip >= 148 ? 6 : 5;
+  const targetPresetName = CLIMBER_PRESETS[targetPresetIdx]?.name ?? 'V9 进阶高手';
+
   modePanel.innerHTML = `
     <div class="section-head">
       <div class="section-title">Beta 解题规划</div>
@@ -988,8 +1077,16 @@ function renderPlanPanel(snap: EngineSnapshot): void {
 
     <div class="route-desc-box">
       ${snap.routeDescription}
+      ${
+        needStrongerClimber
+          ? `<div class="tier-hint-bar">
+              <span>当前 ${snap.routeGrade}（${snap.wallAngleDeg}°）推荐指力 ≥ ${snap.liveGradeEstimate.recommendedGrip}</span>
+              <button id="bp-upgrade-climber" class="btn btn-sm btn-primary">切至${targetPresetName}</button>
+            </div>`
+          : ''
+      }
       <div style="margin-top:6px;color:var(--ink-muted);">
-        动作模式：抓点(H) · 踩墙(S) · 悬空(F) · <strong>单手飞跃(D)</strong> · <strong>双手齐飞(G)</strong>。飞跃需踩稳脚下支点蓄力起跳！
+        动作模式：抓点(H) · 踩墙(S) · 悬空(F) · <strong>单手飞跃(D)</strong> · <strong>双手齐飞(G)</strong>。可随时调节墙面倾角体验 Kilter 板变难！
       </div>
     </div>
 
@@ -1076,11 +1173,14 @@ function renderPlanPanel(snap: EngineSnapshot): void {
     </button>
   `;
 
+  modePanel.querySelector('#bp-upgrade-climber')?.addEventListener('click', () => {
+    engine.applyProfilePreset(targetPresetIdx);
+  });
   modePanel.querySelector('#bp-suggest')?.addEventListener('click', () => {
     const res = engine.autoSuggestBeta();
     if (!res.solved) {
       stageBottomPill.classList.remove('hidden');
-      stageBottomPill.innerHTML = `<span class="eval-tag fail">未找到完整解法</span><span>当前体型在此线路可能超出极限，可尝试调整身高/臂展或补充过渡岩点。</span>`;
+      stageBottomPill.innerHTML = `<span class="eval-tag fail">未找到完整解法</span><span>当前体型/指力在 ${snap.wallAngleDeg}° 倾角下超出极限，可切换高阶体型（V9/V11）或调缓墙面倾角。</span>`;
     }
   });
   modePanel.querySelector('#bp-undo')?.addEventListener('click', () => engine.undoBetaStep());
