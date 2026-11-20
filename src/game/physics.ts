@@ -66,7 +66,7 @@ export function computeWallAnglePhysics(wallAngleDeg = 0): WallAnglePhysics {
     slabBalanceMult: 1 + 1.15 * sinSlab,
     smearWallMult: clamp(1 - 0.52 * sinOverhang + 0.25 * sinSlab, 0.48, 1.18),
     dynoRiseMult: clamp(Math.cos(Math.max(0, rad)) * 0.48 + 0.52, 0.76, 1.0),
-    minHandGripThreshold: Math.round(24 + sinOverhang * 16),
+    minHandGripThreshold: Math.round(25 + sinOverhang * 18),
   };
 }
 
@@ -500,16 +500,31 @@ function evaluateDynoMove(
   const alignLimb: LimbId = target.bothHands ? 'rh' : limb;
   const { alignment, angleDiffDeg } = computeHoldAlignment(targetHold, alignLimb, nextPose);
   const strengthToWeight = (profile.gripStrength / 92) / Math.pow(anatomy.weightFactor, 0.5);
+  // Full-body airborne double-dyno shock load makes catching small/slopey holds much harder than jugs
+  const shockMult = target.bothHands
+    ? targetHold.type === 'jug'
+      ? 1.0
+      : targetHold.type === 'pinch'
+        ? 0.90
+        : targetHold.type === 'crimp'
+          ? 0.78
+          : targetHold.type === 'sloper'
+            ? 0.74
+            : 0.58
+    : targetHold.type === 'microcrimp'
+      ? 0.84
+      : 1.0;
   const catchFactor =
     spec.handGrip *
     scaleGrip *
     wallPhys.handGripMult *
     alignment *
+    shockMult *
     clamp(strengthToWeight, 0.74, 1.78);
   const gripScore = clamp(Math.round(catchFactor * 100), 0, 100);
 
-  const minCatch = target.bothHands ? 0.38 : 0.44;
-  if (alignment < 0.34) {
+  const minCatch = target.bothHands ? 0.52 : 0.45;
+  if (alignment < 0.36) {
     return failEval(
       nextPose,
       `飞跃抓点角度偏离 ${Math.round(angleDiffDeg)}°，滞空冲击下打滑脱落`,
@@ -845,7 +860,14 @@ export function evaluateMove(
       }
       warnings.push(`微抠 #${targetHold.label} 小脚点过渡，指力消耗极大`);
     }
-    const minAlign = targetHold.type === 'microcrimp' ? 0.36 : 0.28;
+    const minAlign =
+      targetHold.type === 'microcrimp'
+        ? 0.42
+        : targetHold.type === 'sloper'
+          ? 0.38
+          : targetHold.type === 'crimp'
+            ? 0.34
+            : 0.28;
     if (isHand && alignment < minAlign) {
       return failEval(
         nextPose,
@@ -853,11 +875,11 @@ export function evaluateMove(
         { reachRatio: effectiveReach, reachExcessCm, isDyno, gripScore, directionAlignment: alignment }
       );
     }
-    // Realistic steep-overhang & micro-crimp finger-strength gate!
+    // Realistic steep-overhang & small-hold finger-strength gate!
     if (
       isHand &&
       targetHold.type !== 'foothold' &&
-      (wallPhys.angleDeg >= 20 || targetHold.type === 'microcrimp') &&
+      (wallPhys.angleDeg >= 10 || targetHold.type === 'microcrimp') &&
       gripScore < wallPhys.minHandGripThreshold
     ) {
       const tiltHint =
@@ -980,7 +1002,7 @@ export function evaluateMove(
     barnDoorRisk = clamp(barnDoorRisk + 0.12, 0, 1);
   }
 
-  if (barnDoorRisk > 0.82 && !isLowStartStanding) {
+  if (barnDoorRisk > 0.76 && !isLowStartStanding) {
     return failEval(nextPose, '支点集中在同侧导致开门失衡，可对侧踩墙/悬空配重或换脚稳住', {
       reachRatio: effectiveReach,
       reachExcessCm,
@@ -1011,7 +1033,7 @@ export function evaluateMove(
 
   // 6. Stamina (overhang multiplies forearm & core tension drain!)
   const footSupportFactor =
-    remainingFeet.length >= 2 ? 0.78 : remainingFeet.length === 1 ? 1.0 : 1.75;
+    remainingFeet.length >= 2 ? 0.76 : remainingFeet.length === 1 ? 1.08 : 1.85;
   const reachFactor = isDyno ? 1.65 : effectiveReach > 0.9 ? 1.32 : 1.0;
   const alignFactor = 1 + (1 - alignment) * 0.9;
   const scrunchFactor = 1 + nextPose.scrunchPenalty * 0.45;

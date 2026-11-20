@@ -164,109 +164,109 @@ const GRADE_BLUEPRINTS: Record<number, GradeBlueprint> = {
     maxDy: 54,
     minDx: 26,
     maxDx: 52,
-    maxAngle: 22,
+    maxAngle: 24,
     handPool: ['jug', 'pinch', 'pinch', 'jug'],
     startPool: ['jug', 'pinch'],
     topPool: ['jug'],
     twoStartsProb: 0.88,
-    footBonusProb: 0.7,
+    footBonusProb: 0.65,
     volumeProb: 0.25,
-    scaleBase: 1.12,
-    cruxBoostDy: 4,
+    scaleBase: 1.1,
+    cruxBoostDy: 5,
     cruxCount: 1,
   },
   3: {
-    wallAngles: [-5, 0, 10, 15],
+    wallAngles: [5, 10, 15],
     styles: ['balanced', 'tech', 'power'],
     numHands: 5,
     minDy: 46,
     maxDy: 60,
     minDx: 34,
-    maxDx: 66,
-    maxAngle: 38,
+    maxDx: 68,
+    maxAngle: 42,
     handPool: ['pinch', 'crimp', 'jug', 'pinch', 'sloper'],
     startPool: ['jug', 'pinch'],
     topPool: ['jug', 'pinch'],
-    twoStartsProb: 0.78,
-    footBonusProb: 0.5,
+    twoStartsProb: 0.76,
+    footBonusProb: 0.45,
     volumeProb: 0.35,
-    scaleBase: 1.05,
-    cruxBoostDy: 8,
+    scaleBase: 1.02,
+    cruxBoostDy: 9,
     cruxCount: 1,
   },
   4: {
-    wallAngles: [10, 15, 20],
+    wallAngles: [15, 20],
     styles: ['balanced', 'power', 'tech', 'dyno'],
     numHands: 5,
     minDy: 50,
     maxDy: 64,
     minDx: 40,
-    maxDx: 76,
-    maxAngle: 48,
+    maxDx: 78,
+    maxAngle: 56,
     handPool: ['crimp', 'pinch', 'sloper', 'crimp'],
-    startPool: ['pinch', 'jug'],
-    topPool: ['jug', 'pinch'],
-    twoStartsProb: 0.62,
-    footBonusProb: 0.34,
-    volumeProb: 0.35,
-    scaleBase: 1.0,
-    cruxBoostDy: 13,
+    startPool: ['pinch', 'crimp'],
+    topPool: ['pinch', 'crimp', 'sloper'],
+    twoStartsProb: 0.58,
+    footBonusProb: 0.24,
+    volumeProb: 0.32,
+    scaleBase: 0.96,
+    cruxBoostDy: 14,
     cruxCount: 1,
   },
   5: {
-    wallAngles: [-5, 15, 20, 25],
+    wallAngles: [20, 25],
     styles: ['power', 'tech', 'dyno'],
-    numHands: 4,
-    minDy: 54,
-    maxDy: 70,
+    numHands: 5,
+    minDy: 52,
+    maxDy: 68,
     minDx: 44,
     maxDx: 84,
-    maxAngle: 56,
-    handPool: ['crimp', 'sloper', 'pinch', 'crimp'],
-    startPool: ['pinch', 'crimp'],
-    topPool: ['pinch', 'jug'],
-    twoStartsProb: 0.52,
-    footBonusProb: 0.24,
-    volumeProb: 0.3,
-    scaleBase: 0.96,
+    maxAngle: 64,
+    handPool: ['crimp', 'sloper', 'crimp', 'sloper'],
+    startPool: ['crimp', 'sloper', 'pinch'],
+    topPool: ['crimp', 'sloper', 'pinch'],
+    twoStartsProb: 0.48,
+    footBonusProb: 0.16,
+    volumeProb: 0.26,
+    scaleBase: 0.92,
     cruxBoostDy: 16,
-    cruxCount: 1,
+    cruxCount: 2,
   },
   6: {
-    wallAngles: [20, 25, 30],
+    wallAngles: [25, 30],
     styles: ['power', 'tech', 'dyno'],
     numHands: 4,
     minDy: 56,
     maxDy: 74,
     minDx: 48,
-    maxDx: 92,
-    maxAngle: 62,
-    handPool: ['crimp', 'sloper', 'crimp', 'pinch'],
-    startPool: ['crimp', 'pinch'],
-    topPool: ['pinch', 'sloper', 'jug'],
-    twoStartsProb: 0.45,
-    footBonusProb: 0.16,
-    volumeProb: 0.25,
-    scaleBase: 0.93,
-    cruxBoostDy: 18,
-    cruxCount: 1,
+    maxDx: 90,
+    maxAngle: 68,
+    handPool: ['crimp', 'sloper', 'crimp', 'sloper'],
+    startPool: ['crimp', 'sloper'],
+    topPool: ['crimp', 'sloper', 'pinch'],
+    twoStartsProb: 0.42,
+    footBonusProb: 0.12,
+    volumeProb: 0.22,
+    scaleBase: 0.89,
+    cruxBoostDy: 19,
+    cruxCount: 2,
   },
   7: {
-    wallAngles: [20, 25, 30],
+    wallAngles: [30, 35],
     styles: ['power', 'tech', 'dyno'],
     numHands: 4,
     minDy: 58,
     maxDy: 76,
     minDx: 50,
     maxDx: 96,
-    maxAngle: 68,
-    handPool: ['crimp', 'sloper', 'crimp', 'pinch'],
+    maxAngle: 72,
+    handPool: ['crimp', 'sloper', 'crimp', 'microcrimp'],
     startPool: ['crimp', 'sloper', 'pinch'],
-    topPool: ['sloper', 'pinch', 'crimp'],
-    twoStartsProb: 0.38,
-    footBonusProb: 0.14,
-    volumeProb: 0.2,
-    scaleBase: 0.91,
+    topPool: ['sloper', 'crimp', 'pinch'],
+    twoStartsProb: 0.36,
+    footBonusProb: 0.1,
+    volumeProb: 0.18,
+    scaleBase: 0.88,
     cruxBoostDy: 20,
     cruxCount: 2,
   },
@@ -403,38 +403,42 @@ export function measureRouteDifficulty(
   const top2Crux =
     handStrains.length >= 2 ? (handStrains[0] + handStrains[1]) / 2 : cruxStrain;
 
-  // Intrinsic hold quality (independent of climber strength so high-tier climbers don't deflate hold difficulty)
+  // Intrinsic hold quality (includes hold scale so 0.85x crimps score harder than 1.15x crimps!)
   const handHolds = holds.filter((h) => h.type !== 'foothold');
   const microCount = handHolds.filter((h) => h.type === 'microcrimp').length;
   const avgHoldHandGrip =
     handHolds.length > 0
-      ? handHolds.reduce((s, h) => s + HOLD_SPECS[h.type].handGrip, 0) / handHolds.length
+      ? handHolds.reduce(
+          (s, h) => s + HOLD_SPECS[h.type].handGrip * clamp(0.65 + (h.scale ?? 1) * 0.35, 0.78, 1.14),
+          0
+        ) / handHolds.length
       : 0.85;
 
-  // Component scores calibrated to real V1–V11 progression:
+  // Component scores calibrated cleanly to real Hueco V1–V11 progression (zero V1 inflation!):
   const angleTerm =
     wallAngleDeg >= 0
       ? clamp((wallAngleDeg / 55) * 4.4, 0, 4.4)
-      : clamp((Math.abs(wallAngleDeg) / 10) * 1.15, 0, 1.15);
-  const holdTerm = clamp((0.96 - avgHoldHandGrip) * 8.2, 0, 3.6) + Math.min(1.4, microCount * 0.45);
-  const cruxTerm = clamp((top2Crux - 7) / 4.2, 0, 3.2);
-  const staminaTerm = clamp((staminaSpent - 22) / 16, 0, 3.0);
-  const hardDynoTerm = Math.min(2.2, hardMoves * 0.35 + dynoMoves * 0.95);
-  const reachTerm = clamp((maxReach - 0.8) * 4.2, 0, 1.3);
-  const balanceTerm = clamp((maxBarnDoor - 0.25) * 2.0, 0, 0.9);
+      : clamp((Math.abs(wallAngleDeg) / 10) * 1.4, 0, 1.4);
+  const holdTerm =
+    clamp((0.96 - avgHoldHandGrip) * 5.6, 0, 3.0) + Math.min(1.2, microCount * 0.36);
+  const cruxTerm = clamp((top2Crux - 10) / 5.5, 0, 1.9);
+  const staminaTerm = clamp((staminaSpent - 40) / 34, 0, 1.7);
+  const hardDynoTerm = Math.min(1.5, hardMoves * 0.18 + dynoMoves * 0.42);
+  const reachTerm = clamp((maxReach - 0.92) * 2.8, 0, 0.7);
+  const balanceTerm = clamp((maxBarnDoor - 0.38) * 1.5, 0, 0.5);
   // Strength tier compensation: if measured with a stronger climber (grip > 92), their extra strength masked difficulty
-  const strengthBonus = clamp((profile.gripStrength - 92) / 22, 0, 2.9);
+  const strengthBonus = clamp((profile.gripStrength - 92) / 26, 0, 2.5);
 
   const rawGrade =
-    0.75 +
-    angleTerm * 0.85 +
-    holdTerm * 0.68 +
-    cruxTerm * 0.48 +
-    staminaTerm * 0.32 +
-    hardDynoTerm * 0.45 +
-    reachTerm * 0.32 +
-    balanceTerm * 0.28 +
-    strengthBonus * 0.68;
+    0.9 +
+    angleTerm * 0.88 +
+    holdTerm * 0.74 +
+    cruxTerm * 0.42 +
+    staminaTerm * 0.42 +
+    hardDynoTerm * 0.38 +
+    reachTerm * 0.25 +
+    balanceTerm * 0.25 +
+    strengthBonus * 0.82;
 
   return {
     estimatedGrade: clamp(Math.round(rawGrade * 10) / 10, 1.0, 11.5),
@@ -470,13 +474,14 @@ export function estimateRouteGrade(
   }
 
   const standard = CLIMBER_PRESETS[1];
+  const powerV7 = CLIMBER_PRESETS[3];
   const advV9 = CLIMBER_PRESETS[5];
   const proV11 = CLIMBER_PRESETS[6];
 
-  const solStd = suggestBeta(holds, standard, 18, 10, wallAngleDeg);
+  const solStd = suggestBeta(holds, standard, 18, 12, wallAngleDeg);
   if (solStd.solved) {
     const m = measureRouteDifficulty(holds, solStd.steps, standard, wallAngleDeg);
-    const g = clamp(Math.round(m.estimatedGrade), 1, 7);
+    const g = clamp(Math.round(m.estimatedGrade), 1, 6);
     return {
       gradeLabel: `V${g}`,
       numericGrade: g,
@@ -485,10 +490,22 @@ export function estimateRouteGrade(
     };
   }
 
-  const solAdv = suggestBeta(holds, advV9, 18, 10, wallAngleDeg);
+  const solPow = suggestBeta(holds, powerV7, 18, 12, wallAngleDeg);
+  if (solPow.solved) {
+    const m = measureRouteDifficulty(holds, solPow.steps, powerV7, wallAngleDeg);
+    const g = clamp(Math.round(Math.max(6.8, m.estimatedGrade)), 7, 8);
+    return {
+      gradeLabel: `V${g}`,
+      numericGrade: g,
+      requiredTier: 'standard',
+      recommendedGrip: 114,
+    };
+  }
+
+  const solAdv = suggestBeta(holds, advV9, 18, 12, wallAngleDeg);
   if (solAdv.solved) {
     const m = measureRouteDifficulty(holds, solAdv.steps, advV9, wallAngleDeg);
-    const g = clamp(Math.round(Math.max(7.6, m.estimatedGrade)), 8, 9);
+    const g = clamp(Math.round(Math.max(7.8, m.estimatedGrade)), 8, 9);
     return {
       gradeLabel: `V${g}`,
       numericGrade: g,
@@ -497,7 +514,7 @@ export function estimateRouteGrade(
     };
   }
 
-  const solPro = suggestBeta(holds, proV11, 18, 10, wallAngleDeg);
+  const solPro = suggestBeta(holds, proV11, 18, 12, wallAngleDeg);
   if (solPro.solved) {
     const m = measureRouteDifficulty(holds, solPro.steps, proV11, wallAngleDeg);
     const g = clamp(Math.round(Math.max(9.6, m.estimatedGrade)), 10, 11);
@@ -535,8 +552,8 @@ export function generateRoute(
 
   // Pick a style-appropriate wall angle within the grade's realistic band
   let chosenWallAngle = pick(bp.wallAngles);
-  if (style === 'tech' && g >= 3 && g <= 7) {
-    chosenWallAngle = Math.random() < 0.5 ? -5 : Math.max(0, bp.wallAngles[0] - 5);
+  if (style === 'tech' && g >= 3 && g <= 5) {
+    chosenWallAngle = Math.random() < 0.35 ? (g >= 5 ? -10 : -5) : bp.wallAngles[0];
   } else if (style === 'power' && g >= 4) {
     chosenWallAngle = bp.wallAngles[bp.wallAngles.length - 1];
   } else if (style === 'dyno' && g >= 4) {
@@ -563,8 +580,8 @@ export function generateRoute(
   let bestScoreError = Infinity;
   const anatomy = computeAnatomy(profile);
 
-  const baseAttempts = g >= 8 ? 10 : g >= 5 ? 8 : 6;
-  const hardCapAttempts = 20;
+  const baseAttempts = g >= 7 ? 10 : g >= 4 ? 8 : 6;
+  const hardCapAttempts = 26;
   for (let attempt = 0; attempt < hardCapAttempts; attempt++) {
     // Stop once we have finished the normal sampling budget AND found at least one verified solvable route
     if (attempt >= baseAttempts && bestMetrics !== null) break;
@@ -577,19 +594,25 @@ export function generateRoute(
           ? bp.wallAngles[0]
           : pick(bp.wallAngles);
 
-    // Style-tuned hold pool (only use microcrimps on V8+ overhangs or V7 low-angle tech slabs)
+    // Style-tuned hold pool (strictly zero jugs on V4+ except explicit V4 dyno catch)
     const styleHandPool: HoldType[] = isRecoveryPass
       ? g >= 8
         ? ['crimp', 'pinch', 'microcrimp', 'crimp']
-        : ['crimp', 'pinch', 'sloper', 'crimp']
+        : g >= 5
+          ? ['crimp', 'pinch', 'sloper', 'crimp']
+          : bp.handPool
       : style === 'tech'
-        ? g >= 8 || (g === 7 && trialAngle <= 10)
+        ? g >= 8
           ? ['sloper', 'crimp', 'microcrimp', 'sloper']
-          : ['sloper', 'crimp', 'pinch', 'sloper']
+          : g >= 5
+            ? ['sloper', 'crimp', 'sloper', 'crimp']
+            : ['sloper', 'crimp', 'pinch', 'sloper']
         : style === 'dyno'
           ? g >= 8
             ? ['crimp', 'pinch', 'crimp', 'microcrimp']
-            : ['pinch', 'crimp', 'jug', 'pinch']
+            : g >= 5
+              ? ['pinch', 'crimp', 'sloper', 'crimp']
+              : ['pinch', 'crimp', 'pinch', 'sloper']
           : bp.handPool;
 
     // Start zone
@@ -868,17 +891,24 @@ export function generateRoute(
     }
 
     // Verify solvability against the grade's reference climber at trialAngle!
-    const sol = suggestBeta(numbered, profile, 18, 12, trialAngle);
+    const sol = suggestBeta(
+      numbered,
+      profile,
+      isRecoveryPass ? 22 : 20,
+      isRecoveryPass ? 18 : 14,
+      trialAngle
+    );
     if (!sol.solved) continue;
 
     const metrics = measureRouteDifficulty(numbered, sol.steps, profile, trialAngle);
     let err = Math.abs(metrics.estimatedGrade - g);
     if (g <= 2 && (metrics.dynoMoves > 0 || metrics.hardMoves > g)) err += 2.5;
-    if (g >= 6 && metrics.hardMoves + metrics.dynoMoves === 0) err += 2.2;
+    if (g >= 4 && metrics.staminaSpent < 45 + (g - 4) * 6) err += 1.6;
+    if (g >= 5 && metrics.hardMoves + metrics.dynoMoves < 1) err += 2.2;
     // For V8+, prefer routes that truly challenge standard (92) climbers!
     if (g >= 8) {
-      const stdTry = suggestBeta(numbered, CLIMBER_PRESETS[1], 14, 8, trialAngle);
-      if (stdTry.solved) err += 2.8;
+      const stdTry = suggestBeta(numbered, CLIMBER_PRESETS[1], 16, 10, trialAngle);
+      if (stdTry.solved) err += 3.0;
     }
 
     if (err < bestScoreError) {
@@ -886,7 +916,7 @@ export function generateRoute(
       bestHolds = numbered;
       bestWallAngle = trialAngle;
       bestMetrics = metrics;
-      if (err <= 0.9) break;
+      if (err <= 0.75) break;
     }
   }
 
@@ -977,7 +1007,7 @@ export function suggestBeta(
       (a.rh && topHolds.some((t) => t.id === a.rh) ? 90 : 0);
 
     const footFollowBonus = clamp(footAvgY - (handMaxY - 170), -90, 45) * 0.45;
-    return -avgHandDist * 1.15 + topBonus + footFollowBonus + stamina * 0.85 - stepCount * 4.5;
+    return -avgHandDist * 1.15 + topBonus + footFollowBonus + stamina * 0.85 - stepCount * 2.4;
   };
 
   let beam: SearchNode[] = [
@@ -994,8 +1024,11 @@ export function suggestBeta(
   visited.set(stateKey(initial), 100);
 
   let bestNode = beam[0];
+  let bestSolved: { steps: BetaStep[]; dynoCount: number; stamina: number; depth: number } | null = null;
 
   for (let depth = 0; depth < maxDepth; depth++) {
+    // Once we have a dyno-based solution, search at most 3 more plies to prefer a clean static send
+    if (bestSolved && depth > bestSolved.depth + 3) break;
     const nextBeam: SearchNode[] = [];
 
     for (const node of beam) {
@@ -1030,39 +1063,53 @@ export function suggestBeta(
 
         for (const target of candidates) {
           const freeMap = emptyFreeMap();
-          const candidatesTargets: LimbTarget[] = [holdTarget(target.id)];
-          if (isHand && target.y > maxHandY + 12) {
-            candidatesTargets.push(dynoTarget(target.id, false));
-            if (limb === 'rh') {
-              candidatesTargets.push(dynoTarget(target.id, true));
-            }
-          }
+          const staticTarget = holdTarget(target.id);
+          const staticEv = evaluateMove(
+            node.assignment,
+            freeMap,
+            limb,
+            staticTarget,
+            holds,
+            profile,
+            wallAngleDeg
+          );
 
-          for (const limbTarget of candidatesTargets) {
-            const ev = evaluateMove(
+          const evaluations: Array<{ limbTarget: LimbTarget; ev: ReturnType<typeof evaluateMove> }> = [];
+          if (staticEv.feasible) {
+            evaluations.push({ limbTarget: staticTarget, ev: staticEv });
+          } else if (isHand && target.y > maxHandY + 14) {
+            // Only attempt explicit Dyno when static reach is genuinely impossible (no V1–V3 dyno cheesing!)
+            const singleDyno = dynoTarget(target.id, false);
+            const singleEv = evaluateMove(
               node.assignment,
               freeMap,
               limb,
-              limbTarget,
+              singleDyno,
               holds,
               profile,
               wallAngleDeg
             );
-            if (!ev.feasible) continue;
-
-            if (limbTarget.kind === 'dyno' && !limbTarget.bothHands) {
-              const staticEv = evaluateMove(
+            if (singleEv.feasible) {
+              evaluations.push({ limbTarget: singleDyno, ev: singleEv });
+            }
+            if (limb === 'rh' && target.y > maxHandY + 38) {
+              const dblDyno = dynoTarget(target.id, true);
+              const dblEv = evaluateMove(
                 node.assignment,
                 freeMap,
                 limb,
-                holdTarget(target.id),
+                dblDyno,
                 holds,
                 profile,
                 wallAngleDeg
               );
-              if (staticEv.feasible) continue;
+              if (dblEv.feasible) {
+                evaluations.push({ limbTarget: dblDyno, ev: dblEv });
+              }
             }
+          }
 
+          for (const { limbTarget, ev } of evaluations) {
             const newStamina = node.stamina - ev.staminaCost;
             if (newStamina <= 2) continue;
 
@@ -1087,12 +1134,32 @@ export function suggestBeta(
             const steps = [...node.steps, step];
 
             if (isTopReached(nextAssignment, holds)) {
-              return { solved: true, steps, bestProgressY: topTarget.y };
+              const dynoCount = steps.filter((s) => s.target.kind === 'dyno').length;
+              const isStaticSend = dynoCount === 0 && !ev.isDyno;
+              if (isStaticSend) {
+                return { solved: true, steps, bestProgressY: topTarget.y };
+              }
+              if (
+                !bestSolved ||
+                dynoCount < bestSolved.dynoCount ||
+                (dynoCount === bestSolved.dynoCount && newStamina > bestSolved.stamina)
+              ) {
+                bestSolved = { steps, dynoCount, stamina: newStamina, depth };
+              }
+              continue;
             }
 
             const altBonus = node.lastLimb !== limb ? 4 : 0;
             const ratingPenalty =
-              limbTarget.kind === 'dyno' ? -12 : ev.rating === 'dyno' ? -8 : ev.rating === 'hard' ? -3 : 0;
+              limbTarget.kind === 'dyno'
+                ? limbTarget.bothHands
+                  ? -46
+                  : -30
+                : ev.isDyno || ev.rating === 'dyno'
+                  ? -28
+                  : ev.rating === 'hard'
+                    ? -6
+                    : 0;
             const sc = scoreState(nextAssignment, newStamina, steps.length) + altBonus + ratingPenalty;
 
             const child: SearchNode = {
@@ -1113,6 +1180,10 @@ export function suggestBeta(
     if (nextBeam.length === 0) break;
     nextBeam.sort((a, b) => b.score - a.score);
     beam = nextBeam.slice(0, beamWidth);
+  }
+
+  if (bestSolved) {
+    return { solved: true, steps: bestSolved.steps, bestProgressY: topTarget.y };
   }
 
   const bestLh = bestNode.assignment.lh ? holdMap.get(bestNode.assignment.lh) : undefined;

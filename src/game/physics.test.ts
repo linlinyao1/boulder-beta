@@ -333,4 +333,41 @@ describe('Bouldering physics, V1–V11 grades & Kilter wall angle', () => {
       ).toBe(true);
     }
   });
+
+  it('enforces authentic V4 & V5 difficulty (no soft jugs, real angles, no V8 double-dyno cheese)', () => {
+    const std = CLIMBER_PRESETS[1];
+    let v4EstSum = 0;
+    let v5EstSum = 0;
+
+    for (let i = 0; i < 3; i++) {
+      const r4 = generateRoute(4);
+      const r5 = generateRoute(5);
+      // Zero jugs on V4 and V5!
+      expect(r4.holds.some((h) => h.type === 'jug')).toBe(false);
+      expect(r5.holds.some((h) => h.type === 'jug')).toBe(false);
+      // Authentic wall tilt (steep overhang or technical slab, never flat 0°/5° ladders)
+      expect(Math.abs(r4.wallAngleDeg)).toBeGreaterThanOrEqual(5);
+      expect(r4.wallAngleDeg).not.toBe(0);
+      expect(Math.abs(r5.wallAngleDeg)).toBeGreaterThanOrEqual(10);
+
+      const s4 = suggestBeta(r4.holds, std, 24, 20, r4.wallAngleDeg);
+      const s5 = suggestBeta(r5.holds, std, 24, 20, r5.wallAngleDeg);
+      expect(s4.solved).toBe(true);
+      expect(s5.solved).toBe(true);
+
+      const m4 = measureRouteDifficulty(r4.holds, s4.steps, std, r4.wallAngleDeg);
+      const m5 = measureRouteDifficulty(r5.holds, s5.steps, std, r5.wallAngleDeg);
+      expect(m4.estimatedGrade).toBeGreaterThanOrEqual(3.5);
+      expect(m5.estimatedGrade).toBeGreaterThanOrEqual(4.3);
+      expect(m5.staminaSpent).toBeGreaterThanOrEqual(60);
+      v4EstSum += m4.estimatedGrade;
+      v5EstSum += m5.estimatedGrade;
+    }
+
+    expect(v5EstSum / 3).toBeGreaterThan(v4EstSum / 3 + 0.2);
+
+    // Ensure standard (92 grip) cannot cheese V8 MoonBoard via double-dyno skips even at beamWidth=24
+    const v8 = PRESET_ROUTES.find((r) => r.id === 'preset-v8-moonboard')!;
+    expect(suggestBeta(v8.holds, std, 22, 24, v8.wallAngleDeg).solved).toBe(false);
+  });
 });

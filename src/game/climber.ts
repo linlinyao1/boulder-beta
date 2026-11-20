@@ -54,21 +54,23 @@ export const CLIMBER_PRESETS: ClimberProfile[] = [
 
 /**
  * Returns the objective reference climber tier expected for a target V-grade (V1..V11):
- * - V1..V7: Standard 172cm climber (grip 92)
+ * - V1..V6: Standard 172cm climber (grip 92)
+ * - V7: Power climber (grip 114)
  * - V8..V9: Advanced V9 climber (grip 132)
  * - V10..V11: World-Cup V11 climber (grip 154)
  */
 export function getReferenceClimberForGrade(gradeNum: number): ClimberProfile {
   if (gradeNum >= 10) return CLIMBER_PRESETS[6];
   if (gradeNum >= 8) return CLIMBER_PRESETS[5];
+  if (gradeNum >= 7) return CLIMBER_PRESETS[3];
   return CLIMBER_PRESETS[1];
 }
 
 export function getGripTierHint(gripStrength: number): string {
   if (gripStrength < 82) return 'V1–V3 级';
-  if (gripStrength < 104) return 'V4–V7 级';
-  if (gripStrength < 124) return 'V7–V8 级';
-  if (gripStrength < 144) return 'V8–V10 级';
+  if (gripStrength < 104) return 'V4–V6 级';
+  if (gripStrength < 124) return 'V7 级';
+  if (gripStrength < 144) return 'V8–V9 级';
   return 'V10–V11 级';
 }
 

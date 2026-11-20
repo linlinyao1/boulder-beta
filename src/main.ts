@@ -199,7 +199,7 @@ app.innerHTML = `
               <label class="slider-row">
                 <div class="slider-label-row">
                   <span>指力与握力 (Grip)</span>
-                  <span id="val-grip" class="slider-val">92 · V4–V7 级</span>
+                  <span id="val-grip" class="slider-val">92 · V4–V6 级</span>
                 </div>
                 <input id="sl-grip" type="range" min="65" max="160" step="1" value="92" />
               </label>
