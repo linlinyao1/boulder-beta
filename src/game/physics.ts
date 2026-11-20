@@ -342,10 +342,21 @@ export function getDynoEnvelope(
   };
 
   // Fingertip reach envelope relative to release shoulder:
-  // Upward = arm length + airborne CoM rise
-  // Lateral = arm length + realistic lateral push-off (limited by foot friction angle)
+  // Upward = arm length + airborne CoM rise (fights full 1.0g gravity — unchanged to prevent vertical cheesing!)
+  // Lateral = horizontal push-off does NOT fight gravity directly; full-body Double Dyno leaps much further sideways!
   const maxUpReach = anatomy.maxArmReach + maxJumpRiseCm;
-  const maxLatReach = anatomy.maxArmReach + maxJumpRiseCm * 0.85 + (bothHands ? 8 : 4);
+  const macroFootBonus = pushFeet.some((fl) => {
+    const hid = assignment[fl];
+    const h = hid ? holdMap.get(hid) : undefined;
+    return h && (h.type === 'volume' || (h.type === 'sloper' && h.scale >= 1.2));
+  })
+    ? bothHands
+      ? 14
+      : 6
+    : 0;
+  const maxLatReach = bothHands
+    ? anatomy.maxArmReach + maxJumpRiseCm * 2.25 + 18 + macroFootBonus
+    : anatomy.maxArmReach + maxJumpRiseCm * 1.3 + 10 + macroFootBonus;
 
   return {
     canLaunch: true,
@@ -359,7 +370,52 @@ export function getDynoEnvelope(
 }
 
 /**
- * Evaluates an explicit Single-Hand or Double-Hand Dyno (dynamic launch + possible cut-loose).
+ * Finds a realistic intermediate stepping-stone macro/foothold for a horizontal coordination
+ * run-and-jump Double Dyno (e.g. running across a low comp volume between start and catch holds).
+ */
+function findCoordinationStepHold(
+  launchOrigin: Vec2,
+  targetHold: Hold,
+  holds: Hold[],
+  wallAngleDeg: number
+): Hold | null {
+  if (wallAngleDeg > 30) return null;
+  const rawDx = targetHold.x - launchOrigin.x;
+  const absDx = Math.abs(rawDx);
+  const rawDy = targetHold.y - launchOrigin.y;
+  // Only triggers for predominantly lateral coordination moves
+  if (absDx < 85 || absDx < Math.max(0, rawDy) * 1.05) return null;
+
+  const dir = Math.sign(rawDx);
+  const minX = Math.min(launchOrigin.x, targetHold.x) + 22;
+  const maxX = Math.max(launchOrigin.x, targetHold.x) - 22;
+  const maxStepY = Math.max(155, Math.min(launchOrigin.y - 25, targetHold.y - 18));
+
+  const candidates = holds
+    .filter((h) => {
+      if (h.id === targetHold.id) return false;
+      if (h.x < minX || h.x > maxX) return false;
+      if (h.y < 18 || h.y > maxStepY) return false;
+      return h.type === 'volume' || h.type === 'foothold' || h.type === 'jug' || h.type === 'sloper';
+    })
+    .sort((a, b) => (a.x - b.x) * dir);
+
+  if (candidates.length === 0) return null;
+
+  let curX = launchOrigin.x;
+  let lastStone: Hold | null = null;
+  for (const h of candidates) {
+    const stride = (h.x - curX) * dir;
+    if (stride > 18 && stride <= 165) {
+      curX = h.x;
+      lastStone = h;
+    }
+  }
+  return lastStone;
+}
+
+/**
+ * Evaluates an explicit Single-Hand or Double-Hand Dyno (vertical, lateral, or coordination run-and-jump).
  */
 function evaluateDynoMove(
   prevAssignment: LimbAssignment,
@@ -422,8 +478,36 @@ function evaluateDynoMove(
     });
   }
 
-  const dx = Math.abs(targetHold.x - env.launchOrigin.x);
-  const dy = targetHold.y - env.launchOrigin.y;
+  // Check if a horizontal Double Dyno can use an intermediate stepping-stone macro (run-and-jump coordination!)
+  let effectiveLaunch = env.launchOrigin;
+  let effectiveMaxLat = env.maxLatReach;
+  let effectiveMaxUp = env.maxUpReach;
+  let coordStepHold: Hold | null = null;
+
+  const rawDx = Math.abs(targetHold.x - env.launchOrigin.x);
+  const rawDy = targetHold.y - env.launchOrigin.y;
+  const isLateralDyno = rawDx >= 58 && rawDx >= Math.max(0, rawDy) * 0.95;
+
+  if (target.bothHands && isLateralDyno) {
+    const stone = findCoordinationStepHold(env.launchOrigin, targetHold, holds, wallAngleDeg);
+    if (stone) {
+      coordStepHold = stone;
+      const stepShoulderY = clamp(
+        stone.y + anatomy.maxLegReach * 0.86 + anatomy.torsoLen * 0.92,
+        env.launchOrigin.y - 35,
+        Math.max(env.launchOrigin.y + 18, stone.y + anatomy.heightCm * 0.78)
+      );
+      effectiveLaunch = {
+        x: stone.x * 0.85 + targetHold.x * 0.15,
+        y: stepShoulderY,
+      };
+      effectiveMaxLat = env.maxLatReach * 1.18;
+      effectiveMaxUp = env.maxUpReach * 1.04;
+    }
+  }
+
+  const dx = Math.abs(targetHold.x - effectiveLaunch.x);
+  const dy = targetHold.y - effectiveLaunch.y;
   const upNeed = Math.max(0, dy);
   const downNeed = Math.max(0, -dy);
 
@@ -439,6 +523,7 @@ function evaluateDynoMove(
           `目标点跨距 (${Math.round(spanBetweenHands)}cm) 超出单手滞留臂展 (${Math.round(maxSpan)}cm)，请改用「双飞 (G)」双手同时起跳`,
           {
             isDyno: true,
+            isLateralDyno,
             reachRatio: spanBetweenHands / anatomy.maxArmReach,
             reachExcessCm: Math.round(spanBetweenHands - maxSpan),
             staminaCost: 16,
@@ -448,21 +533,22 @@ function evaluateDynoMove(
     }
   }
 
-  // Elliptical ballistic reach check (gravity & lateral friction couple vertical and horizontal jump!)
-  const verticalNorm = upNeed > 0 ? upNeed / env.maxUpReach : (downNeed * 0.65) / env.maxUpReach;
-  const lateralNorm = dx / env.maxLatReach;
+  // Elliptical ballistic reach check (gravity opposes upward leap, assists slight downward lateral arc!)
+  const verticalNorm = upNeed > 0 ? upNeed / effectiveMaxUp : (downNeed * 0.35) / effectiveMaxUp;
+  const lateralNorm = dx / effectiveMaxLat;
   const dynoEffort = Math.hypot(lateralNorm, verticalNorm);
-  const reachRatio = dist(env.launchOrigin, targetHold) / Math.max(1, anatomy.maxArmReach);
+  const reachRatio = dist(effectiveLaunch, targetHold) / Math.max(1, anatomy.maxArmReach);
 
   if (dynoEffort > 1.0) {
     const excessRatio = dynoEffort - 1.0;
-    const gapCm = Math.max(1, Math.round(excessRatio * Math.min(env.maxUpReach, env.maxLatReach)));
+    const gapCm = Math.max(1, Math.round(excessRatio * Math.min(effectiveMaxUp, effectiveMaxLat)));
     return failEval(
       startPose,
-      `${target.bothHands ? '双手飞跃' : '动态飞跃'}超出真人起跳极限（差约 ${gapCm}cm，当前滞空约 +${Math.round(env.maxJumpRiseCm)}cm），请先踩高脚点再起跳`,
+      `${target.bothHands ? (isLateralDyno ? '横向双手飞跃' : '双手飞跃') : '动态飞跃'}超出真人起跳极限（差约 ${gapCm}cm，当前滞空约 +${Math.round(env.maxJumpRiseCm)}cm），请先踩高/横移脚点再起跳`,
       {
         isDyno: true,
         isDoubleDyno: target.bothHands,
+        isLateralDyno,
         reachRatio,
         reachExcessCm: gapCm,
         staminaCost: 20,
@@ -505,20 +591,24 @@ function evaluateDynoMove(
   const alignLimb: LimbId = target.bothHands ? 'rh' : limb;
   const { alignment, angleDiffDeg } = computeHoldAlignment(targetHold, alignLimb, nextPose);
   const strengthToWeight = (profile.gripStrength / 92) / Math.pow(anatomy.weightFactor, 0.5);
-  // Full-body airborne double-dyno shock load makes catching small/slopey/pocket/dual-tex holds much harder than jugs
+  // Full-body airborne double-dyno shock load: jugs & huge comp volumes/macros absorb impact well; small crimps/microcrimps do not
   const shockMult =
     (target.bothHands
       ? targetHold.type === 'jug'
         ? 1.0
-        : targetHold.type === 'pinch'
-          ? 0.9
-          : targetHold.type === 'crimp'
-            ? 0.78
+        : targetHold.type === 'volume'
+          ? 0.92
+          : targetHold.type === 'pinch'
+            ? 0.9
             : targetHold.type === 'sloper'
-              ? 0.74
-              : targetHold.type === 'pocket'
-                ? 0.72
-                : 0.58
+              ? targetHold.scale >= 1.25
+                ? 0.85
+                : 0.74
+              : targetHold.type === 'crimp'
+                ? 0.78
+                : targetHold.type === 'pocket'
+                  ? 0.72
+                  : 0.58
       : targetHold.type === 'microcrimp'
         ? 0.84
         : targetHold.type === 'pocket'
@@ -535,7 +625,13 @@ function evaluateDynoMove(
     clamp(strengthToWeight, 0.74, 1.78);
   const gripScore = clamp(Math.round(catchFactor * 100), 0, 100);
 
-  const minCatch = target.bothHands ? 0.52 : 0.45;
+  // Lateral coordination catches on moderate walls (<=25°) redirect horizontal momentum smoothly into aligned holds,
+  // whereas vertical upward double dynos & steep overhangs absorb full vertical falling shock (strict 0.52 gate!).
+  const minCatch = target.bothHands
+    ? isLateralDyno && wallAngleDeg <= 25 && alignment >= 0.72
+      ? 0.45
+      : 0.52
+    : 0.45;
   const minDynoAlign = targetHold.dualTex ? 0.44 : 0.36;
   if (alignment < minDynoAlign) {
     return failEval(
@@ -576,11 +672,19 @@ function evaluateDynoMove(
   }
 
   if (target.bothHands) {
-    warnings.push(`双手大飞跃 (质心滞空 +${Math.round(env.maxJumpRiseCm * dynoEffort)}cm)！落地切脚悬空，请找脚点稳住摆荡`);
+    if (coordStepHold) {
+      warnings.push(
+        `横向协调跑跳飞跃（经 #${coordStepHold.label} 借力蹬踏横跨 ${Math.round(rawDx)}cm）！落地切脚稳住摆荡`
+      );
+    } else if (isLateralDyno) {
+      warnings.push(`横向双手飞跃 (横跨 ${Math.round(rawDx)}cm)！落地切脚悬空，请找脚点稳住摆荡`);
+    } else {
+      warnings.push(`双手大飞跃 (质心滞空 +${Math.round(env.maxJumpRiseCm * dynoEffort)}cm)！落地切脚悬空，请找脚点稳住摆荡`);
+    }
   } else if (cutsFeet) {
-    warnings.push('大跨距动态飞跃并切脚悬空 (Cut-loose)，注意控制摆荡');
+    warnings.push(isLateralDyno ? '大跨距横向飞跃并切脚悬空，注意控制摆荡' : '大跨距动态飞跃并切脚悬空 (Cut-loose)，注意控制摆荡');
   } else {
-    warnings.push('动态死点出手 (Deadpoint)，保留脚点快速抓稳');
+    warnings.push(isLateralDyno ? '横向动态出手，保留脚点快速抓稳' : '动态死点出手 (Deadpoint)，保留脚点快速抓稳');
   }
 
   const intensity = clamp(dynoEffort, 0.35, 1);
@@ -606,6 +710,8 @@ function evaluateDynoMove(
     reachExcessCm: 0,
     isDyno: true,
     isDoubleDyno: target.bothHands,
+    isLateralDyno,
+    coordStepHoldId: coordStepHold?.id,
     cutsFeet,
     gripScore,
     balanceScore,

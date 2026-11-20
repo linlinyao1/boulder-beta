@@ -8,6 +8,7 @@ import {
   suggestBeta,
 } from './generator';
 import { getHoldHitRadius } from './holds';
+import { Hold } from './types';
 import { blendPosesRigid, dist, doLegsIntersect } from './ik';
 import {
   evaluateBetaSequence,
@@ -369,6 +370,28 @@ describe('Bouldering physics, V1–V11 grades & Kilter wall angle', () => {
     // Ensure standard (92 grip) cannot cheese V8 MoonBoard via double-dyno skips even at beamWidth=24
     const v8 = PRESET_ROUTES.find((r) => r.id === 'preset-v8-moonboard')!;
     expect(suggestBeta(v8.holds, std, 22, 24, v8.wallAngleDeg).solved).toBe(false);
+  });
+
+  it('solves horizontal coordination run-and-jump Dyno routes via AI Beta solver', () => {
+    const std = CLIMBER_PRESETS[1];
+    // Real-world Banana Climbing style V5 horizontal coordination boulder:
+    // Start far left (#4) with giant bottom stepping-stone macros (#1, #2) -> run & jump right to rails (#3, #5, #6, #7) -> top macro (#10)
+    const coordRoute: Hold[] = [
+      { id: 'c1', label: 1, x: 70, y: 55, type: 'volume', role: 'normal', angle: 0, scale: 1.45, color: '#7EBEB2' },
+      { id: 'c2', label: 2, x: 202, y: 58, type: 'volume', role: 'normal', angle: 0, scale: 1.45, color: '#7EBEB2' },
+      { id: 'c3', label: 3, x: 338, y: 98, type: 'sloper', role: 'normal', angle: -30, scale: 1.5, color: '#7EBEB2' },
+      { id: 'c4', label: 4, x: 348, y: 145, type: 'sloper', role: 'normal', angle: -25, scale: 1.45, color: '#7EBEB2' },
+      { id: 'c5', label: 5, x: 354, y: 188, type: 'sloper', role: 'normal', angle: -25, scale: 1.45, color: '#7EBEB2' },
+      { id: 'c6', label: 6, x: 68, y: 210, type: 'sloper', role: 'start', angle: -10, scale: 1.45, color: '#7EBEB2' },
+      { id: 'c7', label: 7, x: 330, y: 232, type: 'crimp', role: 'normal', angle: -10, scale: 1.0, color: '#7EBEB2' },
+      { id: 'c8', label: 8, x: 300, y: 310, type: 'volume', role: 'normal', angle: 0, scale: 1.5, color: '#7EBEB2' },
+      { id: 'c9', label: 9, x: 248, y: 356, type: 'sloper', role: 'normal', angle: -10, scale: 1.15, color: '#7EBEB2' },
+      { id: 'c10', label: 10, x: 220, y: 410, type: 'volume', role: 'top', angle: 0, scale: 1.45, color: '#7EBEB2' },
+    ];
+
+    const sol = suggestBeta(coordRoute, std, 24, 24, 10);
+    expect(sol.solved, 'AI solver should solve horizontal coordination run-and-jump route').toBe(true);
+    expect(sol.steps.some((s) => s.target.kind === 'dyno')).toBe(true);
   });
 
   it('physically simulates Dual-Tex strict angle lock, Thumb Catch grip boost, and Pocket holds', () => {

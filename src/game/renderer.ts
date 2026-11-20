@@ -1102,9 +1102,18 @@ function drawBetaArrows(ctx: CanvasRenderingContext2D, tr: WallTransform, state:
     ctx.fillText(String(idx + 1), mx, my + 0.5);
 
     if (isExplicitDyno) {
-      ctx.font = '700 8.5px "Space Grotesk", sans-serif';
+      ctx.font = '700 8.5px "Space Grotesk", "PingFang SC", sans-serif';
       ctx.fillStyle = strokeCol;
-      ctx.fillText(isDoubleDyno ? '双飞' : 'DYNO', mx, my - 13);
+      const badge = trace.evaluation.coordStepHoldId
+        ? '协调跑跳'
+        : trace.evaluation.isLateralDyno
+          ? isDoubleDyno
+            ? '横向双飞'
+            : '横向DYNO'
+          : isDoubleDyno
+            ? '双飞'
+            : 'DYNO';
+      ctx.fillText(badge, mx, my - 13);
     }
     ctx.restore();
   });

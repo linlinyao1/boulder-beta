@@ -5,11 +5,21 @@ export interface ReleaseNote {
   highlights: string[];
 }
 
-export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.5.2';
+export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.5.3';
 export const GIT_COMMIT: string = typeof __GIT_COMMIT__ !== 'undefined' ? __GIT_COMMIT__ : 'dev';
 export const BUILD_TIME: string = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
 
 export const RELEASE_NOTES: ReleaseNote[] = [
+  {
+    version: '1.5.3',
+    date: '2026-11-20',
+    title: '横向飞跃 & 协调跑跳 Dyno 物理引擎与 AI 自动推演支持',
+    highlights: [
+      '升级 Dyno 物理包络支持真实「横向飞跃 (Lateral Dyno)」与「横向协调跑跳（借助中间大造型/脚点连续蹬踏起跳）」',
+      'AI Beta 求解器解除「仅向上飞跃」限制，支持大跨度横移/斜向动态飞跃，并修复大造型（Volume）与超大圆弧点滞空抓停冲击系数',
+      'Beta 路径箭头新增「横向双飞 / 协调跑跳」标识，演练动画支持滞空中段脚踏中间大造型借力发力效果',
+    ],
+  },
   {
     version: '1.5.2',
     date: '2026-11-20',

@@ -137,6 +137,8 @@ export interface MoveEvaluation {
   reachExcessCm: number; // >0 if beyond static reach
   isDyno: boolean;
   isDoubleDyno?: boolean;
+  isLateralDyno?: boolean;
+  coordStepHoldId?: string;
   cutsFeet?: boolean; // true when a big dynamic leap cuts feet loose off the wall
   gripScore: number; // 0..100
   balanceScore: number; // 0..100

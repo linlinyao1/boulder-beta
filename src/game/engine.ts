@@ -917,9 +917,13 @@ export class BoulderEngine {
         : targetLabel(step.target);
     const isDoubleDyno = step.target.kind === 'dyno' && step.target.bothHands;
     this.climbStatusText = isDoubleDyno
-      ? `第 ${stepIdx + 1} 步：深蹲蓄力，双手齐飞 (Double Dyno) -> ${destLabel}！`
+      ? ev.coordStepHoldId
+        ? `第 ${stepIdx + 1} 步：横向协调跑跳飞跃（借力中间造型蹬踏）-> ${destLabel}！`
+        : ev.isLateralDyno
+          ? `第 ${stepIdx + 1} 步：蓄力侧蹬，横向双手飞跃 -> ${destLabel}！`
+          : `第 ${stepIdx + 1} 步：深蹲蓄力，双手齐飞 (Double Dyno) -> ${destLabel}！`
       : ev.isDyno
-        ? `第 ${stepIdx + 1} 步：蹬脚发力，${limbName}动态飞跃 -> ${destLabel}！`
+        ? `第 ${stepIdx + 1} 步：蹬脚发力，${limbName}${ev.isLateralDyno ? '横向动态飞跃' : '动态飞跃'} -> ${destLabel}！`
         : `第 ${stepIdx + 1} 步：重心调整，${limbName}移动 -> ${destLabel}`;
 
     const nextCruxStrain = ev.staminaCost > cruxStrain ? ev.staminaCost : cruxStrain;
@@ -1158,7 +1162,13 @@ export class BoulderEngine {
         rf: limbPinned('rf') ? a.startPose.limbs.rf : lerpVec(a.startPose.limbs.rf, a.targetPose.limbs.rf, bodyEase),
       };
 
-      // Airborne trailing feet during a cut-loose Dyno!
+      const isCoordStep = Boolean(a.currentEval?.coordStepHoldId);
+      const isLateral = Boolean(a.currentEval?.isLateralDyno);
+      const coordHold = a.currentEval?.coordStepHoldId
+        ? this.holds.find((h) => h.id === a.currentEval?.coordStepHoldId) ?? null
+        : null;
+
+      // Airborne trailing feet during a cut-loose Dyno — or stepping-stone kick-off on Coordination Run-and-Jump!
       if (cutsFeet) {
         const flightDragY = Math.sin(t * Math.PI) * 16;
         const flightDragX = -(a.targetPose.pelvis.x - a.startPose.pelvis.x) * Math.sin(t * Math.PI) * 0.22;
@@ -1170,6 +1180,20 @@ export class BoulderEngine {
           x: lerp(a.startPose.limbs.rf.x, a.targetPose.limbs.rf.x, bodyEase) + flightDragX + 4 * Math.sin(t * Math.PI),
           y: Math.max(8, lerp(a.startPose.limbs.rf.y, a.targetPose.limbs.rf.y, bodyEase) - flightDragY),
         };
+
+        if (isCoordStep && coordHold && t >= 0.15 && t <= 0.65) {
+          // Lead foot plants & pushes off the intermediate stepping-stone macro mid-run!
+          const plantBell = Math.sin(((t - 0.15) / 0.5) * Math.PI);
+          const leadFoot: 'lf' | 'rf' = a.targetPose.pelvis.x >= a.startPose.pelvis.x ? 'rf' : 'lf';
+          limbTargets[leadFoot] = lerpVec(limbTargets[leadFoot], { x: coordHold.x, y: coordHold.y + 4 }, plantBell * 0.92);
+        }
+      }
+
+      if (isLateral && isDoubleDyno) {
+        // Lean torso dynamically into the horizontal leap direction
+        const dirSign = Math.sign(a.targetPose.pelvis.x - a.startPose.pelvis.x);
+        pelvis.y += Math.sin(t * Math.PI) * 8;
+        void dirSign;
       }
 
       // Compute sweeping arc for reaching hand(s) or foot

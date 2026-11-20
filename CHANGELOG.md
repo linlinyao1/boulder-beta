@@ -2,6 +2,17 @@
 
 All notable changes to **BETA 抱石台 (`boulder-beta`)** follow [Semantic Versioning](https://semver.org/).
 
+## [v1.5.3] - 2026-11-20
+### Added & Fixed
+- **Lateral & Coordination Run-and-Jump Dyno Physics (`src/game/physics.ts`)**:
+  - Expanded lateral Dyno envelope (`maxLatReach`) to model authentic horizontal leg push-off without loosening vertical anti-cheese limits (`maxUpReach`).
+  - Added intermediate stepping-stone macro detection (`findCoordinationStepHold`) so horizontal Double Dynos can execute realistic competition-style run-and-jump coordination across low volumes/macros.
+  - Fixed `volume` and oversized comp `sloper` double-dyno catch shock multipliers (`0.92` / `0.85` instead of `0.58` / `0.74`).
+- **AI Beta Solver Horizontal Dyno Exploration (`src/game/generator.ts`)**:
+  - Unlocked Single & Double Dyno search for wide horizontal and diagonal gaps (`lateralGap > 52cm / 82cm`) as well as slightly downward lateral transfers.
+- **Animation & Arrow Badges (`src/game/engine.ts`, `src/game/renderer.ts`)**:
+  - Added mid-flight lead-foot stepping-stone plant animation during coordination run-and-jumps and dedicated `协调跑跳` / `横向双飞` arrow badges.
+
 ## [v1.5.2] - 2026-11-20
 ### Improved
 - **Real-World Gym Photo Vision Engine V2 (`src/game/photoVision.ts`)**:

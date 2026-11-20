@@ -1118,6 +1118,8 @@ export function suggestBeta(
       const lhHold = node.assignment.lh ? holdMap.get(node.assignment.lh) : undefined;
       const rhHold = node.assignment.rh ? holdMap.get(node.assignment.rh) : undefined;
       const maxHandY = Math.max(lhHold?.y ?? 120, rhHold?.y ?? 120);
+      const avgHandX =
+        lhHold && rhHold ? (lhHold.x + rhHold.x) / 2 : (lhHold?.x ?? rhHold?.x ?? 200);
 
       for (const limb of ALL_LIMBS) {
         const isHand = LIMB_META[limb].isHand;
@@ -1128,7 +1130,9 @@ export function suggestBeta(
           if (h.id === currentHoldId) return false;
           if (isHand) {
             if (h.type === 'foothold') return false;
-            if (currentHold && h.y < currentHold.y - 35) return false;
+            // Allow lateral/coordination traversal even slightly downward when moving far horizontally across the wall
+            const isFarLateral = currentHold && Math.abs(h.x - currentHold.x) >= 85;
+            if (currentHold && h.y < currentHold.y - (isFarLateral ? 95 : 35)) return false;
             if (currentHold?.role === 'top') return false;
           } else {
             if (h.y > maxHandY - 12) return false;
@@ -1158,10 +1162,12 @@ export function suggestBeta(
           );
 
           const evaluations: Array<{ limbTarget: LimbTarget; ev: ReturnType<typeof evaluateMove> }> = [];
+          const verticalGap = target.y - maxHandY;
+          const lateralGap = Math.abs(target.x - avgHandX);
           if (staticEv.feasible) {
             evaluations.push({ limbTarget: staticTarget, ev: staticEv });
-          } else if (isHand && target.y > maxHandY + 14) {
-            // Only attempt explicit Dyno when static reach is genuinely impossible (no V1–V3 dyno cheesing!)
+          } else if (isHand && (verticalGap > 14 || lateralGap > 52)) {
+            // Only attempt explicit Dyno when static reach is genuinely impossible (supports both vertical AND horizontal/coordination Dynos!)
             const singleDyno = dynoTarget(target.id, false);
             const singleEv = evaluateMove(
               node.assignment,
@@ -1175,7 +1181,7 @@ export function suggestBeta(
             if (singleEv.feasible) {
               evaluations.push({ limbTarget: singleDyno, ev: singleEv });
             }
-            if (limb === 'rh' && target.y > maxHandY + 38) {
+            if (limb === 'rh' && (verticalGap > 38 || lateralGap > 82)) {
               const dblDyno = dynoTarget(target.id, true);
               const dblEv = evaluateMove(
                 node.assignment,
