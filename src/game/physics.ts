@@ -178,7 +178,12 @@ function computeHoldAlignment(
   const dot = clamp(actualDir.x * idealDir.x + actualDir.y * idealDir.y, -1, 1);
   const angleDiffDeg = (Math.acos(dot) * 180) / Math.PI;
 
-  const tol = spec.angleToleranceDeg;
+  // Dual-Tex narrows usable pull sector (glossy no-tex zone slips); thumb catch widens ergonomic pull sector!
+  const tol = clamp(
+    spec.angleToleranceDeg * (hold.dualTex ? 0.74 : 1.0) + (hold.thumbCatch ? 10 : 0),
+    28,
+    150
+  );
   if (angleDiffDeg <= tol) {
     // Smooth curve from 1.0 down to 0.72 at tolerance boundary
     const t = angleDiffDeg / Math.max(1, tol);
@@ -500,20 +505,27 @@ function evaluateDynoMove(
   const alignLimb: LimbId = target.bothHands ? 'rh' : limb;
   const { alignment, angleDiffDeg } = computeHoldAlignment(targetHold, alignLimb, nextPose);
   const strengthToWeight = (profile.gripStrength / 92) / Math.pow(anatomy.weightFactor, 0.5);
-  // Full-body airborne double-dyno shock load makes catching small/slopey holds much harder than jugs
-  const shockMult = target.bothHands
-    ? targetHold.type === 'jug'
-      ? 1.0
-      : targetHold.type === 'pinch'
-        ? 0.90
-        : targetHold.type === 'crimp'
-          ? 0.78
-          : targetHold.type === 'sloper'
-            ? 0.74
-            : 0.58
-    : targetHold.type === 'microcrimp'
-      ? 0.84
-      : 1.0;
+  // Full-body airborne double-dyno shock load makes catching small/slopey/pocket/dual-tex holds much harder than jugs
+  const shockMult =
+    (target.bothHands
+      ? targetHold.type === 'jug'
+        ? 1.0
+        : targetHold.type === 'pinch'
+          ? 0.9
+          : targetHold.type === 'crimp'
+            ? 0.78
+            : targetHold.type === 'sloper'
+              ? 0.74
+              : targetHold.type === 'pocket'
+                ? 0.72
+                : 0.58
+      : targetHold.type === 'microcrimp'
+        ? 0.84
+        : targetHold.type === 'pocket'
+          ? 0.88
+          : 1.0) *
+    (targetHold.dualTex ? 0.88 : 1.0) *
+    (targetHold.thumbCatch ? 1.06 : 1.0);
   const catchFactor =
     spec.handGrip *
     scaleGrip *
@@ -524,10 +536,13 @@ function evaluateDynoMove(
   const gripScore = clamp(Math.round(catchFactor * 100), 0, 100);
 
   const minCatch = target.bothHands ? 0.52 : 0.45;
-  if (alignment < 0.36) {
+  const minDynoAlign = targetHold.dualTex ? 0.44 : 0.36;
+  if (alignment < minDynoAlign) {
     return failEval(
       nextPose,
-      `飞跃抓点角度偏离 ${Math.round(angleDiffDeg)}°，滞空冲击下打滑脱落`,
+      targetHold.dualTex
+        ? `飞跃抓点角度偏离 ${Math.round(angleDiffDeg)}°，滑入双纹理光滑禁区脱落`
+        : `飞跃抓点角度偏离 ${Math.round(angleDiffDeg)}°，滞空冲击下打滑脱落`,
       {
         isDyno: true,
         isDoubleDyno: target.bothHands,
@@ -813,7 +828,14 @@ export function evaluateMove(
     const scaleGrip = getHoldScaleGripFactor(targetHold.scale);
     const alignInfo = computeHoldAlignment(targetHold, limb, nextPose);
     alignment = alignInfo.alignment;
-    baseGrip = (isHand ? spec.handGrip : spec.footGrip) * scaleGrip;
+    const featureGripMult = isHand
+      ? targetHold.thumbCatch
+        ? 1.07
+        : 1.0
+      : targetHold.dualTex
+        ? 0.88
+        : 1.0;
+    baseGrip = (isHand ? spec.handGrip : spec.footGrip) * scaleGrip * featureGripMult;
     const wallGripFactor = isHand
       ? wallPhys.handGripMult
       : clamp(1 - wallPhys.sinOverhang * 0.14 + wallPhys.sinSlab * 0.08, 0.84, 1.06);
@@ -860,18 +882,23 @@ export function evaluateMove(
       }
       warnings.push(`微抠 #${targetHold.label} 小脚点过渡，指力消耗极大`);
     }
-    const minAlign =
+    const baseMinAlign =
       targetHold.type === 'microcrimp'
         ? 0.42
         : targetHold.type === 'sloper'
           ? 0.38
-          : targetHold.type === 'crimp'
-            ? 0.34
-            : 0.28;
+          : targetHold.type === 'pocket'
+            ? 0.36
+            : targetHold.type === 'crimp'
+              ? 0.34
+              : 0.28;
+    const minAlign = clamp(baseMinAlign + (targetHold.dualTex ? 0.07 : 0), 0.28, 0.56);
     if (isHand && alignment < minAlign) {
       return failEval(
         nextPose,
-        `#${targetHold.label} ${spec.shortZh}发力方向偏离 ${Math.round(alignInfo.angleDiffDeg)}°，手掌打滑脱落`,
+        targetHold.dualTex
+          ? `#${targetHold.label} 双纹理${spec.shortZh}发力偏离 ${Math.round(alignInfo.angleDiffDeg)}°，滑入光滑禁区脱落`
+          : `#${targetHold.label} ${spec.shortZh}发力方向偏离 ${Math.round(alignInfo.angleDiffDeg)}°，手掌打滑脱落`,
         { reachRatio: effectiveReach, reachExcessCm, isDyno, gripScore, directionAlignment: alignment }
       );
     }

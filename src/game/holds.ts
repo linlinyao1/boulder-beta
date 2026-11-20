@@ -1,4 +1,10 @@
-import { Hold, HoldType, LimbId, Vec2 } from './types';
+import { Hold, HoldStyleFamily, HoldType, LimbId, Vec2 } from './types';
+
+export const HOLD_FAMILY_LABELS: Record<HoldStyleFamily, string> = {
+  organic: '拟岩砂岩',
+  comp: '比赛流线',
+  geometric: '几何切面',
+};
 
 export interface HoldSpec {
   type: HoldType;
@@ -61,6 +67,18 @@ export const HOLD_SPECS: Record<HoldType, HoldSpec> = {
     staminaMultiplier: 1.72,
     baseRadiusCm: 7.5,
     comDependency: 0.42,
+  },
+  pocket: {
+    type: 'pocket',
+    nameZh: '口袋点 (Pocket)',
+    shortZh: '口袋点',
+    description: '双指/三指深洞：顺着洞口方向拉极稳，但偏角发力极易打滑，动态抓停要求精准。',
+    handGrip: 0.7,
+    footGrip: 0.74,
+    angleToleranceDeg: 54,
+    staminaMultiplier: 1.38,
+    baseRadiusCm: 10.6,
+    comDependency: 0.24,
   },
   sloper: {
     type: 'sloper',

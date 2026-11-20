@@ -47,6 +47,7 @@ import {
   GameMode,
   Hold,
   HoldRole,
+  HoldStyleFamily,
   HoldType,
   LimbAssignment,
   LimbId,
@@ -67,6 +68,10 @@ export interface SetterBrush {
   angle: number;
   scale: number;
   color: string;
+  styleFamily: HoldStyleFamily;
+  shapeVariant: number;
+  dualTex: boolean;
+  thumbCatch: boolean;
 }
 
 export interface EngineSnapshot {
@@ -199,6 +204,10 @@ export class BoulderEngine {
     angle: 0,
     scale: 1.05,
     color: HOLD_COLORS[0].hex,
+    styleFamily: 'comp',
+    shapeVariant: 0,
+    dualTex: false,
+    thumbCatch: false,
   };
 
   // Plan state
@@ -1469,6 +1478,10 @@ export class BoulderEngine {
           angle: this.brush.angle,
           scale: this.brush.scale,
           color: this.brush.type === 'volume' ? '#3D434C' : this.brush.color,
+          styleFamily: this.brush.styleFamily,
+          shapeVariant: this.brush.shapeVariant,
+          dualTex: this.brush.type !== 'foothold' && this.brush.type !== 'volume' ? this.brush.dualTex : false,
+          thumbCatch: this.brush.type !== 'foothold' && this.brush.type !== 'volume' ? this.brush.thumbCatch : false,
         };
         this.holds = renumberHolds([...this.holds, newHold]);
         this.selectedHoldId = newHold.id;

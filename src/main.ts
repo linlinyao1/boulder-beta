@@ -8,11 +8,12 @@ import {
   getGradeTierColor,
   getWallAngleLabel,
   HOLD_COLORS,
+  HOLD_FAMILY_LABELS,
   HOLD_SPECS,
   LIMB_META,
 } from './game/holds';
 import { PRESET_ROUTES } from './game/presets';
-import { HoldRole, HoldType, PlanContactMode } from './game/types';
+import { HoldRole, HoldStyleFamily, HoldType, PlanContactMode } from './game/types';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 
@@ -828,10 +829,18 @@ function renderStageBottomPill(snap: EngineSnapshot): void {
         }`
       : ev.failReason ?? '动作不可行';
 
+    const holdTraits = [
+      hold.dualTex ? '双纹理' : '',
+      hold.thumbCatch ? '拇指扣' : '',
+    ]
+      .filter(Boolean)
+      .join('·');
+    const holdTitle = `#${hold.label} ${HOLD_SPECS[hold.type].shortZh}${holdTraits ? `(${holdTraits})` : ''}`;
+
     stageBottomPill.classList.remove('hidden');
     stageBottomPill.innerHTML = `
       <span class="eval-tag ${ev.rating}">${tagMap[ev.rating]}</span>
-      <span>${limbName} → #${hold.label} ${HOLD_SPECS[hold.type].shortZh}：${detail}</span>
+      <span>${limbName} → ${holdTitle}：${detail}</span>
     `;
   } else if (snap.mode === 'plan' && snap.wallHoverEval && snap.planContactMode !== 'hold') {
     const ev = snap.wallHoverEval;
@@ -919,6 +928,12 @@ function renderSetterPanel(snap: EngineSnapshot): void {
   const activeColor = selected ? selected.color : snap.brush.color;
   const activeAngle = selected ? selected.angle : snap.brush.angle;
   const activeScale = selected ? selected.scale : snap.brush.scale;
+  const activeFamily: HoldStyleFamily = selected ? selected.styleFamily ?? 'comp' : snap.brush.styleFamily;
+  const activeVariant = selected ? selected.shapeVariant ?? 0 : snap.brush.shapeVariant;
+  const activeDualTex = selected ? Boolean(selected.dualTex) : snap.brush.dualTex;
+  const activeThumbCatch = selected ? Boolean(selected.thumbCatch) : snap.brush.thumbCatch;
+  const variantCount = activeType === 'volume' ? 4 : 3;
+  const supportsSurfaceFeatures = activeType !== 'foothold' && activeType !== 'volume';
 
   modePanel.innerHTML = `
     <div class="section-head">
@@ -942,6 +957,39 @@ function renderSetterPanel(snap: EngineSnapshot): void {
         })
         .join('')}
     </div>
+
+    <div class="section-sub" style="margin-bottom:6px;">造型流派 & 外形变体</div>
+    <div class="role-row" style="margin-bottom:6px;">
+      ${(['organic', 'comp', 'geometric'] as HoldStyleFamily[])
+        .map(
+          (fam) =>
+            `<button class="btn btn-sm ${activeFamily === fam ? 'btn-primary' : ''}" data-hfamily="${fam}">${HOLD_FAMILY_LABELS[fam]}</button>`
+        )
+        .join('')}
+    </div>
+    <div class="role-row" style="margin-bottom:10px;">
+      ${Array.from({ length: variantCount }, (_, idx) => {
+        const label =
+          activeType === 'volume'
+            ? ['斜棱锥', '梯形脊', '菱形台', '圆弧Macro'][idx]
+            : `造型 ${idx + 1}`;
+        return `<button class="btn btn-sm ${activeVariant % variantCount === idx ? 'btn-primary' : ''}" data-hvariant="${idx}">${label}</button>`;
+      }).join('')}
+    </div>
+
+    ${
+      supportsSurfaceFeatures
+        ? `<div class="section-sub" style="margin-bottom:6px;">表面工艺（实时联动物理）</div>
+           <div class="role-row" style="margin-bottom:10px;">
+             <button class="btn btn-sm ${activeDualTex ? 'btn-primary' : ''}" id="st-toggle-dualtex" title="亮面禁区打滑，发力角度容错收紧 26%">
+               ✦ 双纹理 Dual-Tex ${activeDualTex ? '· 开' : ''}
+             </button>
+             <button class="btn btn-sm ${activeThumbCatch ? 'btn-primary' : ''}" id="st-toggle-thumb" title="拇指位增强抓力 +7% 与偏角容错 +10°">
+               ◐ 拇指扣 ${activeThumbCatch ? '· 开' : ''}
+             </button>
+           </div>`
+        : ''
+    }
 
     <div class="section-sub" style="margin-bottom:6px;">岩点属性</div>
     <div class="role-row">
@@ -1020,6 +1068,34 @@ function renderSetterPanel(snap: EngineSnapshot): void {
       if (selected) engine.updateSelectedHold({ type });
       else engine.setBrush({ type });
     });
+  });
+
+  modePanel.querySelectorAll<HTMLButtonElement>('[data-hfamily]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const styleFamily = btn.dataset.hfamily as HoldStyleFamily;
+      if (selected) engine.updateSelectedHold({ styleFamily });
+      else engine.setBrush({ styleFamily });
+    });
+  });
+
+  modePanel.querySelectorAll<HTMLButtonElement>('[data-hvariant]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const shapeVariant = Number(btn.dataset.hvariant);
+      if (selected) engine.updateSelectedHold({ shapeVariant });
+      else engine.setBrush({ shapeVariant });
+    });
+  });
+
+  modePanel.querySelector('#st-toggle-dualtex')?.addEventListener('click', () => {
+    const dualTex = !activeDualTex;
+    if (selected) engine.updateSelectedHold({ dualTex });
+    else engine.setBrush({ dualTex });
+  });
+
+  modePanel.querySelector('#st-toggle-thumb')?.addEventListener('click', () => {
+    const thumbCatch = !activeThumbCatch;
+    if (selected) engine.updateSelectedHold({ thumbCatch });
+    else engine.setBrush({ thumbCatch });
   });
 
   modePanel.querySelectorAll<HTMLButtonElement>('[data-hrole]').forEach((btn) => {

@@ -1,5 +1,6 @@
 import { computeAnatomy } from './climber';
 import { getHoldHitRadius, getHoldOptimalPullDir, getWallAngleLabel, LIMB_META } from './holds';
+import { drawSculptedHoldBody } from './holdShapes';
 import { clamp, lerp, lerpVec } from './ik';
 import { BetaTraceStep, getDynoEnvelope } from './physics';
 import {
@@ -189,15 +190,6 @@ export function screenToWorld(pt: Vec2, tr: WallTransform): Vec2 {
     x: WALL_WIDTH_CM / 2 + (pt.x - tr.wallCenterX) / Math.max(0.01, tr.scale * rowScale),
     y: u * WALL_HEIGHT_CM,
   };
-}
-
-function shadeHex(hex: string, amount: number): string {
-  const clean = hex.replace('#', '');
-  const num = parseInt(clean, 16);
-  const r = clamp(((num >> 16) & 0xff) + amount, 0, 255);
-  const g = clamp(((num >> 8) & 0xff) + amount, 0, 255);
-  const b = clamp((num & 0xff) + amount, 0, 255);
-  return `rgb(${r}, ${g}, ${b})`;
 }
 
 export function renderScene(
@@ -802,113 +794,11 @@ function drawHold(ctx: CanvasRenderingContext2D, tr: WallTransform, hold: Hold, 
     drawGymTape(ctx, pos, r, 'top');
   }
 
-  // Hold body
+  // Hold body (procedural multi-variant sculpted 3D hold with Dual-Tex, thumb catch, chalk & hardware)
   ctx.save();
   ctx.translate(pos.x, pos.y);
   ctx.rotate(rad);
-
-  // Drop shadow on plywood (deepens and extends downward on steep overhangs!)
-  ctx.shadowColor = `rgba(24, 18, 12, ${0.36 + overhangRatio * 0.24})`;
-  ctx.shadowBlur = Math.max(4, r * (0.42 + overhangRatio * 0.4));
-  ctx.shadowOffsetX = 2 + overhangRatio * 2;
-  ctx.shadowOffsetY = 3.5 + overhangRatio * 6.5;
-
-  const baseFill = hold.color;
-  const lightFill = shadeHex(baseFill, 34);
-  const darkFill = shadeHex(baseFill, -36);
-
-  ctx.beginPath();
-  if (hold.type === 'jug') {
-    // Bean / ergonomic bucket shape with deep top lip
-    ctx.moveTo(-r * 1.15, -r * 0.15);
-    ctx.bezierCurveTo(-r * 1.1, -r * 0.85, r * 1.1, -r * 0.85, r * 1.15, -r * 0.15);
-    ctx.bezierCurveTo(r * 1.12, r * 0.65, r * 0.45, r * 0.78, 0, r * 0.68);
-    ctx.bezierCurveTo(-r * 0.55, r * 0.82, -r * 1.1, r * 0.62, -r * 1.15, -r * 0.15);
-  } else if (hold.type === 'crimp') {
-    // Sharp narrow horizontal bar edge (15-20mm)
-    ctx.roundRect(-r * 1.2, -r * 0.42, r * 2.4, r * 0.84, r * 0.25);
-  } else if (hold.type === 'microcrimp') {
-    // Razor-thin 6-10mm micro edge strip
-    ctx.roundRect(-r * 1.32, -r * 0.3, r * 2.64, r * 0.6, r * 0.16);
-  } else if (hold.type === 'pinch') {
-    // Vertical-ish sculpted trapezoid pinch block
-    ctx.moveTo(-r * 0.72, -r * 0.88);
-    ctx.lineTo(r * 0.72, -r * 0.88);
-    ctx.quadraticCurveTo(r * 1.0, 0, r * 0.62, r * 0.9);
-    ctx.lineTo(-r * 0.62, r * 0.9);
-    ctx.quadraticCurveTo(-r * 1.0, 0, -r * 0.72, -r * 0.88);
-  } else if (hold.type === 'sloper') {
-    // Smooth dome
-    ctx.ellipse(0, 0, r * 1.15, r * 0.85, 0, 0, Math.PI * 2);
-  } else if (hold.type === 'foothold') {
-    // Compact angular jib
-    ctx.moveTo(-r * 1.0, -r * 0.35);
-    ctx.lineTo(r * 0.85, -r * 0.55);
-    ctx.lineTo(r * 1.05, r * 0.45);
-    ctx.lineTo(-r * 0.85, r * 0.6);
-  } else {
-    // Volume: large geometric triangle prism
-    ctx.moveTo(0, -r * 1.08);
-    ctx.lineTo(r * 1.15, r * 0.78);
-    ctx.lineTo(-r * 1.15, r * 0.78);
-  }
-  ctx.closePath();
-
-  const holdGrad = ctx.createLinearGradient(0, -r, 0, r);
-  holdGrad.addColorStop(0, lightFill);
-  holdGrad.addColorStop(0.55, baseFill);
-  holdGrad.addColorStop(1, darkFill);
-  ctx.fillStyle = holdGrad;
-  ctx.fill();
-
-  // Crisp edge outline
-  ctx.shadowColor = 'transparent';
-  ctx.strokeStyle = isSelected ? '#111827' : 'rgba(20, 20, 20, 0.28)';
-  ctx.lineWidth = isSelected ? 2.4 : 1;
-  ctx.stroke();
-
-  // Sculpted active gripping lip (shows pull orientation clearly!)
-  if (hold.type === 'jug' || hold.type === 'crimp') {
-    ctx.beginPath();
-    ctx.moveTo(-r * 0.78, -r * 0.25);
-    ctx.quadraticCurveTo(0, -r * 0.56, r * 0.78, -r * 0.25);
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.58)';
-    ctx.lineWidth = Math.max(1.5, r * 0.16);
-    ctx.lineCap = 'round';
-    ctx.stroke();
-  } else if (hold.type === 'microcrimp') {
-    // Razor-crisp bright edge crease to distinguish 6-10mm microcrimp immediately
-    ctx.beginPath();
-    ctx.moveTo(-r * 1.05, -r * 0.14);
-    ctx.lineTo(r * 1.05, -r * 0.14);
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.82)';
-    ctx.lineWidth = Math.max(1.3, r * 0.15);
-    ctx.lineCap = 'butt';
-    ctx.stroke();
-  } else if (hold.type === 'sloper') {
-    ctx.beginPath();
-    ctx.ellipse(0, -r * 0.24, r * 0.62, r * 0.26, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.24)';
-    ctx.fill();
-  } else if (hold.type === 'volume') {
-    // Facet crease lines on volume
-    ctx.beginPath();
-    ctx.moveTo(0, -r * 1.08);
-    ctx.lineTo(0, r * 0.15);
-    ctx.lineTo(r * 1.15, r * 0.78);
-    ctx.moveTo(0, r * 0.15);
-    ctx.lineTo(-r * 1.15, r * 0.78);
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-  }
-
-  // Stainless steel bolt socket
-  ctx.beginPath();
-  ctx.arc(0, r * 0.12, Math.max(1.5, r * 0.13), 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(28, 32, 38, 0.55)';
-  ctx.fill();
-
+  drawSculptedHoldBody(ctx, hold, r, isSelected, overhangRatio);
   ctx.restore();
 
   // Pull-direction arrow indicator when selected or hovered (for non-footholds)

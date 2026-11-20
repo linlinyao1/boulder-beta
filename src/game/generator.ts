@@ -9,6 +9,7 @@ import {
   getHoldHitRadius,
   getWallAngleLabel,
   HOLD_COLORS,
+  HOLD_FAMILY_LABELS,
   HOLD_SPECS,
   LIMB_META,
   renumberHolds,
@@ -25,6 +26,7 @@ import {
   BetaStep,
   ClimberProfile,
   Hold,
+  HoldStyleFamily,
   HoldType,
   LimbAssignment,
   LimbId,
@@ -203,7 +205,7 @@ const GRADE_BLUEPRINTS: Record<number, GradeBlueprint> = {
     minDx: 40,
     maxDx: 78,
     maxAngle: 56,
-    handPool: ['crimp', 'pinch', 'sloper', 'crimp'],
+    handPool: ['crimp', 'pinch', 'sloper', 'pocket', 'crimp'],
     startPool: ['pinch', 'crimp'],
     topPool: ['pinch', 'crimp', 'sloper'],
     twoStartsProb: 0.58,
@@ -222,7 +224,7 @@ const GRADE_BLUEPRINTS: Record<number, GradeBlueprint> = {
     minDx: 44,
     maxDx: 84,
     maxAngle: 64,
-    handPool: ['crimp', 'sloper', 'crimp', 'sloper'],
+    handPool: ['crimp', 'sloper', 'pocket', 'crimp', 'sloper'],
     startPool: ['crimp', 'sloper', 'pinch'],
     topPool: ['crimp', 'sloper', 'pinch'],
     twoStartsProb: 0.48,
@@ -241,7 +243,7 @@ const GRADE_BLUEPRINTS: Record<number, GradeBlueprint> = {
     minDx: 48,
     maxDx: 90,
     maxAngle: 68,
-    handPool: ['crimp', 'sloper', 'crimp', 'sloper'],
+    handPool: ['crimp', 'sloper', 'pocket', 'crimp', 'sloper'],
     startPool: ['crimp', 'sloper'],
     topPool: ['crimp', 'sloper', 'pinch'],
     twoStartsProb: 0.42,
@@ -260,7 +262,7 @@ const GRADE_BLUEPRINTS: Record<number, GradeBlueprint> = {
     minDx: 50,
     maxDx: 96,
     maxAngle: 72,
-    handPool: ['crimp', 'sloper', 'crimp', 'microcrimp'],
+    handPool: ['crimp', 'sloper', 'pocket', 'crimp', 'microcrimp'],
     startPool: ['crimp', 'sloper', 'pinch'],
     topPool: ['sloper', 'crimp', 'pinch'],
     twoStartsProb: 0.36,
@@ -280,7 +282,7 @@ const GRADE_BLUEPRINTS: Record<number, GradeBlueprint> = {
     minDx: 52,
     maxDx: 100,
     maxAngle: 70,
-    handPool: ['crimp', 'microcrimp', 'sloper', 'crimp'],
+    handPool: ['crimp', 'microcrimp', 'pocket', 'sloper', 'crimp'],
     startPool: ['crimp', 'pinch'],
     topPool: ['crimp', 'pinch', 'sloper'],
     twoStartsProb: 0.35,
@@ -403,9 +405,10 @@ export function measureRouteDifficulty(
   const top2Crux =
     handStrains.length >= 2 ? (handStrains[0] + handStrains[1]) / 2 : cruxStrain;
 
-  // Intrinsic hold quality (includes hold scale so 0.85x crimps score harder than 1.15x crimps!)
+  // Intrinsic hold quality (includes hold scale, microcrimp & dual-tex technical precision!)
   const handHolds = holds.filter((h) => h.type !== 'foothold');
   const microCount = handHolds.filter((h) => h.type === 'microcrimp').length;
+  const dualTexCount = handHolds.filter((h) => h.dualTex).length;
   const avgHoldHandGrip =
     handHolds.length > 0
       ? handHolds.reduce(
@@ -420,7 +423,9 @@ export function measureRouteDifficulty(
       ? clamp((wallAngleDeg / 55) * 4.4, 0, 4.4)
       : clamp((Math.abs(wallAngleDeg) / 10) * 1.4, 0, 1.4);
   const holdTerm =
-    clamp((0.96 - avgHoldHandGrip) * 5.6, 0, 3.0) + Math.min(1.2, microCount * 0.36);
+    clamp((0.96 - avgHoldHandGrip) * 5.6, 0, 3.0) +
+    Math.min(1.2, microCount * 0.36) +
+    Math.min(0.6, dualTexCount * 0.16);
   const cruxTerm = clamp((top2Crux - 10) / 5.5, 0, 1.9);
   const staminaTerm = clamp((staminaSpent - 40) / 34, 0, 1.7);
   const hardDynoTerm = Math.min(1.5, hardMoves * 0.18 + dynoMoves * 0.42);
@@ -547,8 +552,44 @@ export function generateRoute(
   const profile = referenceProfile ?? getReferenceClimberForGrade(g);
   const bp = GRADE_BLUEPRINTS[g];
   const style: RouteStyle = forcedStyle ?? pick(bp.styles);
+  const holdFamily: HoldStyleFamily =
+    style === 'tech' || style === 'dyno'
+      ? pick(['comp', 'comp', 'geometric'])
+      : style === 'power'
+        ? pick(['geometric', 'organic', 'comp'])
+        : pick(['organic', 'comp', 'geometric']);
   const colorObj = pick(HOLD_COLORS.slice(0, 5));
   const color = colorObj.hex;
+
+  const pickVariantForFamily = (type: HoldType): number => {
+    if (type === 'volume') {
+      if (holdFamily === 'comp') return pick([3, 2, 1]);
+      if (holdFamily === 'geometric') return pick([0, 1, 2]);
+      return pick([0, 1, 3]);
+    }
+    // Bias silhouette variant toward the route's sculptural family while keeping rich variety
+    if (holdFamily === 'organic') return pick([0, 0, 1, 2]);
+    if (holdFamily === 'comp') return pick([1, 1, 0, 2]);
+    return pick([2, 2, 0, 1]);
+  };
+
+  const maybeDualTex = (type: HoldType, isRecovery: boolean): boolean => {
+    if (isRecovery || g < 4 || type === 'foothold' || type === 'jug' || type === 'volume') return false;
+    const baseProb =
+      holdFamily === 'comp'
+        ? type === 'sloper'
+          ? 0.55
+          : 0.34
+        : holdFamily === 'geometric'
+          ? 0.22
+          : 0.1;
+    return Math.random() < baseProb;
+  };
+
+  const maybeThumbCatch = (type: HoldType): boolean => {
+    if (type !== 'pinch' && type !== 'crimp') return false;
+    return Math.random() < (type === 'pinch' ? 0.42 : 0.22);
+  };
 
   // Pick a style-appropriate wall angle within the grade's realistic band
   let chosenWallAngle = pick(bp.wallAngles);
@@ -622,6 +663,7 @@ export function generateRoute(
 
     if (twoStarts) {
       const gap = rand(52, 74);
+      const startTypeL = pick(bp.startPool);
       placeHoldWithoutOverlap(
         holds,
         {
@@ -629,15 +671,19 @@ export function generateRoute(
           label: 0,
           x: clamp(startX - gap / 2, 52, WALL_WIDTH_CM - 52),
           y: startY,
-          type: pick(bp.startPool),
+          type: startTypeL,
           role: 'start',
           angle: g <= 1 ? 0 : Math.round(rand(-bp.maxAngle * 0.42, 6)),
           scale: clamp(bp.scaleBase, 0.82, 1.24),
           color,
+          styleFamily: holdFamily,
+          shapeVariant: pickVariantForFamily(startTypeL),
+          thumbCatch: maybeThumbCatch(startTypeL),
         },
         true,
         { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: 102, maxY: 155 }
       );
+      const startTypeR = pick(bp.startPool);
       placeHoldWithoutOverlap(
         holds,
         {
@@ -645,16 +691,20 @@ export function generateRoute(
           label: 0,
           x: clamp(startX + gap / 2, 52, WALL_WIDTH_CM - 52),
           y: startY + rand(-6, 10),
-          type: pick(bp.startPool),
+          type: startTypeR,
           role: 'start',
           angle: g <= 1 ? 0 : Math.round(rand(-6, bp.maxAngle * 0.42)),
           scale: clamp(bp.scaleBase, 0.82, 1.24),
           color,
+          styleFamily: holdFamily,
+          shapeVariant: pickVariantForFamily(startTypeR),
+          thumbCatch: maybeThumbCatch(startTypeR),
         },
         true,
         { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: 102, maxY: 155 }
       );
     } else {
+      const startType = pick(bp.startPool);
       placeHoldWithoutOverlap(
         holds,
         {
@@ -662,11 +712,14 @@ export function generateRoute(
           label: 0,
           x: startX,
           y: startY,
-          type: pick(bp.startPool),
+          type: startType,
           role: 'start',
           angle: g <= 2 ? 0 : Math.round(rand(-15, 15)),
           scale: clamp(bp.scaleBase, 0.84, 1.18),
           color,
+          styleFamily: holdFamily,
+          shapeVariant: pickVariantForFamily(startType),
+          thumbCatch: maybeThumbCatch(startType),
         },
         true,
         { minX: 52, maxX: WALL_WIDTH_CM - 52, minY: 104, maxY: 150 }
@@ -739,8 +792,10 @@ export function generateRoute(
 
       let angle = 0;
       if (bp.maxAngle > 0) {
-        if (type === 'sloper' || type === 'microcrimp') {
-          const cap = type === 'microcrimp' ? 28 : 34;
+        if (isRecoveryPass) {
+          angle = Math.round(rand(-22, 22));
+        } else if (type === 'sloper' || type === 'microcrimp' || type === 'pocket') {
+          const cap = type === 'microcrimp' ? 26 : type === 'pocket' ? 30 : 34;
           angle = Math.round(rand(-Math.min(cap, bp.maxAngle * 0.45), Math.min(cap, bp.maxAngle * 0.45)));
         } else {
           const bias = targetX > prevX ? 1 : -1;
@@ -748,6 +803,7 @@ export function generateRoute(
         }
       }
 
+      const allowDualTex = Math.abs(angle) <= 34 && maybeDualTex(type, isRecoveryPass);
       const placedHand = placeHoldWithoutOverlap(
         holds,
         {
@@ -760,6 +816,10 @@ export function generateRoute(
           angle,
           scale: clamp(bp.scaleBase + rand(-0.05, 0.05), 0.76, 1.24),
           color,
+          styleFamily: holdFamily,
+          shapeVariant: pickVariantForFamily(type),
+          dualTex: allowDualTex,
+          thumbCatch: maybeThumbCatch(type),
         },
         true,
         { minX: 48, maxX: WALL_WIDTH_CM - 48, minY: prevY + 26, maxY: 350 }
@@ -784,6 +844,8 @@ export function generateRoute(
           angle: useVolume ? Math.round(rand(-14, 14)) : 0,
           scale: useVolume ? 1.0 : clamp(bp.scaleBase * 0.94, 0.8, 1.15),
           color: useVolume ? '#3D434C' : color,
+          styleFamily: holdFamily,
+          shapeVariant: pickVariantForFamily(useVolume ? 'volume' : 'foothold'),
         },
         false,
         { minX: 42, maxX: WALL_WIDTH_CM - 42, minY: 62, maxY: placedHand.y - 40 }
@@ -842,6 +904,7 @@ export function generateRoute(
       362,
       414
     );
+    const topType = pick(bp.topPool);
     const placedTop = placeHoldWithoutOverlap(
       holds,
       {
@@ -849,11 +912,13 @@ export function generateRoute(
         label: 0,
         x: topX,
         y: topY,
-        type: pick(bp.topPool),
+        type: topType,
         role: 'top',
         angle: g >= 7 ? Math.round(rand(-18, 18)) : 0,
         scale: clamp(bp.scaleBase + 0.08, 0.86, 1.26),
         color,
+        styleFamily: holdFamily,
+        shapeVariant: pickVariantForFamily(topType),
       },
       true,
       { minX: 60, maxX: WALL_WIDTH_CM - 60, minY: 358, maxY: 416 }
@@ -936,11 +1001,12 @@ export function generateRoute(
 
   const angleNote = getWallAngleLabel(bestWallAngle);
   const styleNote = STYLE_LABELS[style];
+  const familyNote = HOLD_FAMILY_LABELS[holdFamily];
   const telemetryNote = bestMetrics
-    ? ` [${angleNote} · ${styleNote} · ${bestMetrics.stepCount}步 · 耗能${bestMetrics.staminaSpent}%${
+    ? ` [${angleNote} · ${styleNote} · ${familyNote} · ${bestMetrics.stepCount}步 · 耗能${bestMetrics.staminaSpent}%${
         bestMetrics.dynoMoves > 0 ? ` · 飞跃${bestMetrics.dynoMoves}次` : ''
       }]`
-    : ` [${angleNote} · ${styleNote}]`;
+    : ` [${angleNote} · ${styleNote} · ${familyNote}]`;
 
   return {
     id: nextUid('route'),
@@ -948,6 +1014,7 @@ export function generateRoute(
     grade: `V${g}`,
     wallAngleDeg: bestWallAngle,
     style,
+    holdFamily,
     description: `${baseDesc[g]}${telemetryNote}`,
     holdColor: color,
     holds: bestHolds,

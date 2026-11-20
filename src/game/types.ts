@@ -8,9 +8,12 @@ export type HoldType =
   | 'pinch'
   | 'crimp'
   | 'microcrimp'
+  | 'pocket'
   | 'sloper'
   | 'foothold'
   | 'volume';
+
+export type HoldStyleFamily = 'organic' | 'comp' | 'geometric';
 
 export type RouteStyle = 'balanced' | 'power' | 'tech' | 'dyno';
 
@@ -33,6 +36,14 @@ export interface Hold {
   angle: number; // degrees: 0 = flat top edge (pull down), 90 = right-edge sidepull, 180 = undercling
   scale: number; // 0.75..1.4
   color: string;
+  /** Sculptural design family: organic sandstone, modern comp (Flathold/Cheeta), or faceted geometric */
+  styleFamily?: HoldStyleFamily;
+  /** 0..2 silhouette variant within the hold type & family (deterministic from id if omitted) */
+  shapeVariant?: number;
+  /** Dual-Texture (smooth glossy no-tex zone + coarse active grip zone): stricter pull-angle lock! */
+  dualTex?: boolean;
+  /** Ergonomic thumb catch / ridge: boosts hand grip & pull-direction tolerance */
+  thumbCatch?: boolean;
 }
 
 export interface ClimberProfile {
@@ -143,6 +154,7 @@ export interface RouteProblem {
   grade: string; // e.g. 'V1'..'V11'
   wallAngleDeg: number; // -10 (slab) .. 0 (vertical) .. +55 (steep overhang)
   style?: RouteStyle;
+  holdFamily?: HoldStyleFamily;
   description: string;
   holdColor: string;
   holds: Hold[];

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CLIMBER_PRESETS, computeAnatomy, getReferenceClimberForGrade } from './climber';
-import { emptyFreeMap } from './contact';
+import { emptyFreeMap, holdTarget } from './contact';
 import {
   estimateRouteGrade,
   generateRoute,
@@ -369,5 +369,41 @@ describe('Bouldering physics, V1–V11 grades & Kilter wall angle', () => {
     // Ensure standard (92 grip) cannot cheese V8 MoonBoard via double-dyno skips even at beamWidth=24
     const v8 = PRESET_ROUTES.find((r) => r.id === 'preset-v8-moonboard')!;
     expect(suggestBeta(v8.holds, std, 22, 24, v8.wallAngleDeg).solved).toBe(false);
+  });
+
+  it('physically simulates Dual-Tex strict angle lock, Thumb Catch grip boost, and Pocket holds', () => {
+    const std = CLIMBER_PRESETS[1];
+    const baseHolds = [
+      { id: 'f1', label: 1, x: 150, y: 40, type: 'foothold' as const, role: 'normal' as const, angle: 0, scale: 1, color: '#D6453A' },
+      { id: 'f2', label: 2, x: 220, y: 42, type: 'foothold' as const, role: 'normal' as const, angle: 0, scale: 1, color: '#D6453A' },
+      { id: 's1', label: 3, x: 155, y: 130, type: 'jug' as const, role: 'start' as const, angle: 0, scale: 1.1, color: '#D6453A' },
+      { id: 's2', label: 4, x: 215, y: 132, type: 'jug' as const, role: 'start' as const, angle: 0, scale: 1.1, color: '#D6453A' },
+    ];
+    const startAssign = { lh: 's1', rh: 's2', lf: 'f1', rf: 'f2' };
+
+    // Off-axis sloper (angle = -68°): normal sloper vs Dual-Tex sloper
+    const normalSloper = { id: 't1', label: 5, x: 230, y: 196, type: 'sloper' as const, role: 'normal' as const, angle: -68, scale: 1, color: '#D99B26' };
+    const dualTexSloper = { ...normalSloper, dualTex: true };
+
+    const evNormal = evaluateMove(startAssign, emptyFreeMap(), 'rh', holdTarget('t1'), [...baseHolds, normalSloper], std, 10);
+    const evDualTex = evaluateMove(startAssign, emptyFreeMap(), 'rh', holdTarget('t1'), [...baseHolds, dualTexSloper], std, 10);
+    expect(evDualTex.directionAlignment).toBeLessThan(evNormal.directionAlignment);
+    expect(evDualTex.gripScore).toBeLessThan(evNormal.gripScore);
+
+    // Thumb Catch boosts grip on a crimp
+    const plainCrimp = { id: 'c1', label: 5, x: 225, y: 198, type: 'crimp' as const, role: 'normal' as const, angle: 35, scale: 0.94, color: '#2B6CB0' };
+    const thumbCrimp = { ...plainCrimp, thumbCatch: true };
+    const evPlain = evaluateMove(startAssign, emptyFreeMap(), 'rh', holdTarget('c1'), [...baseHolds, plainCrimp], std, 15);
+    const evThumb = evaluateMove(startAssign, emptyFreeMap(), 'rh', holdTarget('c1'), [...baseHolds, thumbCrimp], std, 15);
+    expect(evThumb.feasible).toBe(true);
+    expect(evThumb.gripScore).toBeGreaterThan(evPlain.gripScore);
+
+    // Pocket hold is crisp when aligned and loses alignment steeply when pulled off-axis
+    const alignedPocket = { id: 'p1', label: 5, x: 225, y: 200, type: 'pocket' as const, role: 'normal' as const, angle: 10, scale: 1, color: '#D6453A' };
+    const offAxisPocket = { ...alignedPocket, angle: -115 };
+    const evPGood = evaluateMove(startAssign, emptyFreeMap(), 'rh', holdTarget('p1'), [...baseHolds, alignedPocket], std, 15);
+    const evPBad = evaluateMove(startAssign, emptyFreeMap(), 'rh', holdTarget('p1'), [...baseHolds, offAxisPocket], std, 15);
+    expect(evPGood.feasible).toBe(true);
+    expect(evPBad.feasible).toBe(false);
   });
 });
