@@ -165,6 +165,41 @@ describe('On-device photo-to-route computer vision & physics calibration', () =>
     expect(res.holds.every((h) => h.x < 260)).toBe(true);
   });
 
+  it('separates pastel mint holds on a two-tone white + dark blue-grey wall without merging stacked diagonal rails', () => {
+    // Reproduces modern two-tone gym walls (upper warm white + lower dark blue-grey slate) with pastel mint holds
+    const buf = createBuffer(WALL_WIDTH_CM, WALL_HEIGHT_CM, [205, 193, 177]);
+    for (let y = 200; y < WALL_HEIGHT_CM; y++) {
+      for (let x = 0; x < WALL_WIDTH_CM; x++) {
+        const i = (y * WALL_WIDTH_CM + x) * 4;
+        buf.data[i] = 88;
+        buf.data[i + 1] = 94;
+        buf.data[i + 2] = 114;
+      }
+    }
+
+    // Yellow & tan distractors
+    paintEllipse(buf, 345, 210, 18, 18, [235, 190, 12]);
+    paintEllipse(buf, 210, 150, 10, 10, [152, 124, 98]);
+
+    // Target pastel-mint route: 2 stacked diagonal rails on lower dark wall + 1 macro on white/dark seam + top rail on white wall
+    paintEllipse(buf, 320, 340, 26, 11, [135, 198, 200], { chalkTop: true, shadowBottom: true });
+    paintEllipse(buf, 330, 295, 26, 11, [142, 208, 214], { chalkTop: true, shadowBottom: true });
+    paintEllipse(buf, 110, 225, 24, 14, [104, 178, 178], { chalkTop: true });
+    paintEllipse(buf, 275, 145, 32, 28, [126, 192, 179], { shadowBottom: true });
+    paintEllipse(buf, 210, 62, 34, 12, [82, 150, 148], { chalkTop: true });
+
+    const sampled = samplePatchColor(buf, 275, 145, 4);
+    const res = recognizeHoldsFromRectifiedRgba(
+      buf,
+      [{ x: 275, y: 145, ...sampled, kind: 'include' }],
+      { tolerance: 26, minHoldAreaPx: 34, wallAngleDeg: 15, enablePhysicsCalibration: false }
+    );
+
+    expect(res.holds.length).toBe(5);
+    expect(res.holds.some((h) => h.role === 'top')).toBe(true);
+    expect(res.holds.some((h) => h.role === 'start')).toBe(true);
+  });
+
   it('calibrates noisy CV hold angles via on-device physics solver', () => {
     // Route with intentionally terrible upside-down/off-axis angles on crimps
     const noisyHolds: Hold[] = [

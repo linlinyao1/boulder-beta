@@ -5,11 +5,21 @@ export interface ReleaseNote {
   highlights: string[];
 }
 
-export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.5.1';
+export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.5.2';
 export const GIT_COMMIT: string = typeof __GIT_COMMIT__ !== 'undefined' ? __GIT_COMMIT__ : 'dev';
 export const BUILD_TIME: string = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
 
 export const RELEASE_NOTES: ReleaseNote[] = [
+  {
+    version: '1.5.2',
+    date: '2026-11-20',
+    title: '真实岩馆照片识图引擎 V2：色相提纯、双色墙局部抑噪与手动补点',
+    highlights: [
+      '升级 CIELCH 色相角提纯 + 8×9 空间局部墙面背景建模：彻底解决白墙+深灰蓝墙等双色岩壁误识别与低饱和马卡龙/薄荷绿岩点串色问题',
+      '引入双阈值滞后区域生长（Hysteresis Region Growing）与像素级裂片合并：完整保留大型比赛造型/条状圆弧并保留真实色号，不再把斜排相邻点误合为一点',
+      '针对小红书/抖音竖屏截图自动避开顶部搜索栏与底部评论遮罩，Stage 3 新增实时像素高亮预览与「✎ 补点/删点」一键手动修正被人物遮挡的点',
+    ],
+  },
   {
     version: '1.5.1',
     date: '2026-11-20',

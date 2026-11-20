@@ -46,6 +46,7 @@ export interface RecognitionResult {
   elapsedMs: number;
   maskWidth: number;
   maskHeight: number;
+  mask?: Uint8Array;
 }
 
 export interface RgbaBuffer {
@@ -316,68 +317,206 @@ export function samplePatchColor(
 }
 
 /**
- * Estimates the dominant plywood/wall background CIELAB color via coarse grid median.
+ * Estimates a spatial grid of local wall background CIELAB colors (e.g. 8×9 tiles).
+ * Crucial for real modern gyms with two-tone walls (white upper panels + dark charcoal lower panels)
+ * and strong overhead spotlight gradients where a single global wall color fails badly.
  */
-function estimateWallBackgroundLab(buf: RgbaBuffer): [number, number, number] {
-  const ls: number[] = [];
-  const as: number[] = [];
-  const bs: number[] = [];
-  const stepX = Math.max(4, Math.floor(buf.width / 24));
-  const stepY = Math.max(4, Math.floor(buf.height / 24));
+interface LocalBackgroundGrid {
+  cols: number;
+  rows: number;
+  labs: [number, number, number][];
+}
 
-  for (let y = 4; y < buf.height - 4; y += stepY) {
-    for (let x = 4; x < buf.width - 4; x += stepX) {
-      const i = (y * buf.width + x) * 4;
-      const lab = rgbToLab(buf.data[i], buf.data[i + 1], buf.data[i + 2]);
-      ls.push(lab[0]);
-      as.push(lab[1]);
-      bs.push(lab[2]);
+function buildLocalBackgroundGrid(buf: RgbaBuffer, cols = 8, rows = 9): LocalBackgroundGrid {
+  const w = buf.width;
+  const h = buf.height;
+  const labs: [number, number, number][] = [];
+
+  for (let gy = 0; gy < rows; gy++) {
+    const y0 = Math.max(0, Math.floor(((gy - 0.15) * h) / rows));
+    const y1 = Math.min(h - 1, Math.ceil(((gy + 1.15) * h) / rows));
+    for (let gx = 0; gx < cols; gx++) {
+      const x0 = Math.max(0, Math.floor(((gx - 0.15) * w) / cols));
+      const x1 = Math.min(w - 1, Math.ceil(((gx + 1.15) * w) / cols));
+
+      const ls: number[] = [];
+      const as: number[] = [];
+      const bs: number[] = [];
+      const stepX = Math.max(3, Math.floor((x1 - x0) / 10));
+      const stepY = Math.max(3, Math.floor((y1 - y0) / 10));
+
+      for (let y = y0; y <= y1; y += stepY) {
+        const rowOff = y * w;
+        for (let x = x0; x <= x1; x += stepX) {
+          const p4 = (rowOff + x) * 4;
+          const lab = rgbToLab(buf.data[p4], buf.data[p4 + 1], buf.data[p4 + 2]);
+          ls.push(lab[0]);
+          as.push(lab[1]);
+          bs.push(lab[2]);
+        }
+      }
+      ls.sort((a, b) => a - b);
+      as.sort((a, b) => a - b);
+      bs.sort((a, b) => a - b);
+      const m = Math.floor(ls.length / 2);
+      labs.push([ls[m] ?? 70, as[m] ?? 2, bs[m] ?? 8]);
     }
   }
+  return { cols, rows, labs };
+}
 
-  ls.sort((a, b) => a - b);
-  as.sort((a, b) => a - b);
-  bs.sort((a, b) => a - b);
-  const m = Math.floor(ls.length / 2);
-  return [ls[m] ?? 70, as[m] ?? 4, bs[m] ?? 16];
+function sampleLocalBackground(
+  grid: LocalBackgroundGrid,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+): [number, number, number] {
+  const gx = Math.min(grid.cols - 1, Math.max(0, Math.floor((x * grid.cols) / w)));
+  const gy = Math.min(grid.rows - 1, Math.max(0, Math.floor((y * grid.rows) / h)));
+  return grid.labs[gy * grid.cols + gx];
+}
+
+function labHueDiffDeg(a1: number, b1: number, a2: number, b2: number): number {
+  const h1 = Math.atan2(b1, a1);
+  const h2 = Math.atan2(b2, a2);
+  let diff = Math.abs((h1 - h2) * (180 / Math.PI));
+  if (diff > 180) diff = 360 - diff;
+  return diff;
 }
 
 /**
- * Chalk- & shadow-tolerant CIELAB distance between a pixel and a hold color sample.
+ * Chalk- & shadow-tolerant CIELAB + CIELCH Hue-Purity distance between a pixel and a hold color sample.
+ * Enforces strict hue-angle alignment on chromatic holds (including pastel mint/cyan/pink)
+ * so dark blue-grey/white walls and wrong-hue UI icons NEVER bleed into the hold mask!
  */
 function holdColorDistance(
   pxLab: [number, number, number],
-  sampleLab: [number, number, number]
+  sampleLab: [number, number, number],
+  strictHue = false
 ): number {
   const sampleChroma = Math.hypot(sampleLab[1], sampleLab[2]);
   const dL = pxLab[0] - sampleLab[0];
   const da = pxLab[1] - sampleLab[1];
   const db = pxLab[2] - sampleLab[2];
+  const pxChroma = Math.hypot(pxLab[1], pxLab[2]);
 
-  if (sampleChroma < 14) {
-    // Achromatic holds (black / white / grey): rely primarily on lightness & neutrality!
-    return Math.hypot(dL * 0.92, da * 0.85, db * 0.85);
+  if (sampleChroma < 11.5) {
+    // Achromatic holds (black / white / grey): must also stay low-chroma and close in lightness!
+    if (pxChroma > (strictHue ? 13 : 17)) return 999;
+    return Math.hypot(dL * 0.92, da * 0.9, db * 0.9);
   }
 
-  const pxChroma = Math.hypot(pxLab[1], pxLab[2]);
+  // Chromatic hold (including pastel mint C*~14..24 and vivid red/blue/yellow C*~35..90):
+  // Require a real chromatic signal AND aligned CIELCH hue angle!
+  const minChroma = strictHue
+    ? Math.max(8.5, Math.min(18, sampleChroma * 0.42))
+    : Math.max(5.5, Math.min(13, sampleChroma * 0.25));
+  if (pxChroma < minChroma) {
+    // Very chalky or deeply shadowed face can still match ONLY in relaxed grow mode if hue agrees tightly
+    if (strictHue || pxChroma < 4.5) return 999;
+  }
+
+  const hueDiff = labHueDiffDeg(pxLab[1], pxLab[2], sampleLab[1], sampleLab[2]);
+  // Pastel holds (C* 12..28) need tight hue purity because walls sit close in Euclidean ab space!
+  const maxHueDeg = strictHue
+    ? sampleChroma < 28
+      ? 26
+      : 32
+    : sampleChroma < 28
+      ? 38
+      : 46;
+  if (hueDiff > maxHueDeg) return 999;
+
   let chromaDist = Math.hypot(da, db);
 
-  // Chalk forgiveness: white magnesium chalk raises L* and slightly washes out chroma along the same hue ray
-  if (dL > 8 && pxChroma >= 7) {
-    const cosHue = (pxLab[1] * sampleLab[1] + pxLab[2] * sampleLab[2]) / (pxChroma * sampleChroma);
-    if (cosHue > 0.84) {
-      chromaDist *= 0.74;
+  // Chalk forgiveness: white magnesium chalk raises L* and washes out chroma along the SAME hue ray
+  if (dL > 6 && hueDiff <= 22) {
+    chromaDist *= 0.72;
+  }
+  // Shadow/overhang forgiveness: shadowed underside drops L* & shrinks chroma along the SAME hue ray
+  if (dL < -8 && hueDiff <= 26) {
+    chromaDist *= 0.74;
+  }
+
+  // Add mild hue penalty so distant-hue pixels always rank further than true-hue chalk/shadow pixels
+  const huePenalty = (hueDiff / 36) * 8;
+  return Math.hypot(chromaDist + huePenalty, dL * 0.24);
+}
+
+/**
+ * Light morphological despeckle (removes isolated 1-2px noise and thin 1px UI lines from seed mask)
+ * without erasing compact footholds.
+ */
+function despeckleSeedMask(mask: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(w * h);
+  for (let y = 1; y < h - 1; y++) {
+    const row = y * w;
+    for (let x = 1; x < w - 1; x++) {
+      const idx = row + x;
+      if (!mask[idx]) continue;
+      const neighbors =
+        mask[idx - 1] +
+        mask[idx + 1] +
+        mask[idx - w] +
+        mask[idx + w] +
+        mask[idx - w - 1] +
+        mask[idx - w + 1] +
+        mask[idx + w - 1] +
+        mask[idx + w + 1];
+      if (neighbors >= 4) {
+        out[idx] = 1;
+      }
     }
   }
-  // Overhang shadow forgiveness: shadowed undersides drop L* & shrink chroma radially toward origin
-  if (dL < -10 && pxChroma >= 5) {
-    const cosHue = (pxLab[1] * sampleLab[1] + pxLab[2] * sampleLab[2]) / (pxChroma * sampleChroma);
-    if (cosHue > 0.84) {
-      chromaDist *= 0.8;
+  return out;
+}
+
+/**
+ * Canny-style Hysteresis Region Growing:
+ * High-confidence seed pixels expand into adjacent relaxed-support pixels (chalky lips, shadowed undersides)
+ * so entire 3D macro holds stay intact while background wall / wrong-hue clutter can NEVER self-seed!
+ */
+function hysteresisGrowMask(
+  seedMask: Uint8Array,
+  supportMask: Uint8Array,
+  w: number,
+  h: number
+): Uint8Array {
+  const out = new Uint8Array(w * h);
+  const queue = new Int32Array(w * h);
+  let head = 0;
+  let tail = 0;
+
+  for (let i = 0; i < w * h; i++) {
+    if (seedMask[i]) {
+      out[i] = 1;
+      queue[tail++] = i;
     }
   }
 
-  return Math.hypot(chromaDist, dL * 0.3);
+  while (head < tail) {
+    const cur = queue[head++];
+    const cy = Math.floor(cur / w);
+    const cx = cur - cy * w;
+    for (let dy = -1; dy <= 1; dy++) {
+      const ny = cy + dy;
+      if (ny < 0 || ny >= h) continue;
+      const nRow = ny * w;
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = cx + dx;
+        if (nx < 0 || nx >= w) continue;
+        const ni = nRow + nx;
+        if (!out[ni] && supportMask[ni]) {
+          out[ni] = 1;
+          queue[tail++] = ni;
+        }
+      }
+    }
+  }
+
+  return out;
 }
 
 /**
@@ -667,10 +806,37 @@ function extractHoldBlobs(
     }
   }
 
-  // Merge very close chalk-split fragments (centroid gap < 13px and combined span reasonable)
+  // Conservative fragment merging: ONLY merges tiny chalk-split slivers that sit within a few pixels
+  // of a host blob's actual pixels (NEVER merges diagonal/stacked holds whose axis-aligned bboxes overlap!).
   const initialBlobs = rawGroups.map((px) => analyzeBlobPixels(px, w, buf, baseSampleL));
+  initialBlobs.sort((a, b) => b.area - a.area);
   const mergedFlags = new Array<boolean>(initialBlobs.length).fill(false);
   const finalBlobs: RawBlob[] = [];
+
+  const minPixelGapSq = (a: RawBlob, b: RawBlob, maxDistPx: number): number => {
+    // Fast bbox pre-reject
+    const gx = Math.max(0, Math.max(a.minX - b.maxX, b.minX - a.maxX));
+    const gy = Math.max(0, Math.max(a.minY - b.maxY, b.minY - a.maxY));
+    if (gx > maxDistPx || gy > maxDistPx) return Infinity;
+
+    // Subsample large blobs so worst-case comparison stays < 0.05ms
+    const stepA = Math.max(1, Math.floor(a.pixels.length / 180));
+    const stepB = Math.max(1, Math.floor(b.pixels.length / 120));
+    let bestSq = Infinity;
+    for (let ia = 0; ia < a.pixels.length; ia += stepA) {
+      const pa = a.pixels[ia];
+      const ay = Math.floor(pa / w);
+      const ax = pa - ay * w;
+      for (let ib = 0; ib < b.pixels.length; ib += stepB) {
+        const pb = b.pixels[ib];
+        const by = Math.floor(pb / w);
+        const bx = pb - by * w;
+        const d2 = (ax - bx) * (ax - bx) + (ay - by) * (ay - by);
+        if (d2 < bestSq) bestSq = d2;
+      }
+    }
+    return bestSq;
+  };
 
   for (let i = 0; i < initialBlobs.length; i++) {
     if (mergedFlags[i]) continue;
@@ -678,15 +844,23 @@ function extractHoldBlobs(
     let cur = initialBlobs[i];
     mergedFlags[i] = true;
 
-    for (let j = i + 1; j < initialBlobs.length; j++) {
-      if (mergedFlags[j]) continue;
-      const other = initialBlobs[j];
-      const d = Math.hypot(cur.cx - other.cx, cur.cy - other.cy);
-      const mergeThresh = Math.min(20, Math.max(12, (cur.majorLen + other.majorLen) * 0.34));
-      if (d < mergeThresh) {
-        groupPixels = [...groupPixels, ...other.pixels];
-        cur = analyzeBlobPixels(groupPixels, w, buf, baseSampleL);
-        mergedFlags[j] = true;
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let j = i + 1; j < initialBlobs.length; j++) {
+        if (mergedFlags[j]) continue;
+        const other = initialBlobs[j];
+        // Reconnect small chalk-split / hand-occluded slivers (< 210px²) sitting close to a real hold,
+        // without ever merging medium/large distinct holds placed nearby!
+        const isSmallSliver = other.area < 210;
+        const maxGap = isSmallSliver ? 11.5 : 3.5;
+        const gapSq = minPixelGapSq(cur, other, maxGap + 1);
+        if (gapSq <= maxGap * maxGap) {
+          groupPixels = [...groupPixels, ...other.pixels];
+          cur = analyzeBlobPixels(groupPixels, w, buf, baseSampleL);
+          mergedFlags[j] = true;
+          changed = true;
+        }
       }
     }
     finalBlobs.push(cur);
@@ -714,10 +888,17 @@ function classifyHoldBlob(
   let reason = '中等边缘轮廓';
   let confidence = 0.78;
 
-  if (area >= 1500) {
-    type = 'volume';
-    reason = '超大几何体块';
-    confidence = 0.88;
+  if (area >= 1450) {
+    if (aspectRatio >= 2.15 && minorLen < 32) {
+      // Giant elongated competition rail / banana macro (e.g. finish sloper rail!)
+      type = isVertical ? 'pinch' : 'sloper';
+      reason = '大型比赛条状大圆弧/长捏点';
+      confidence = 0.87;
+    } else {
+      type = 'volume';
+      reason = '超大立体造型 / Macro 块面';
+      confidence = 0.89;
+    }
   } else if (area < 135) {
     if (aspectRatio >= 2.25 && worldY > 125) {
       type = 'microcrimp';
@@ -741,6 +922,10 @@ function classifyHoldBlob(
       type = 'microcrimp';
       reason = '细长微抠边特征';
       confidence = 0.83;
+    } else if (area >= 480) {
+      type = 'sloper';
+      reason = '长条圆弧 / 比赛条状点';
+      confidence = 0.84;
     } else {
       type = 'crimp';
       reason = '扁平窄边抠点特征';
@@ -750,7 +935,7 @@ function classifyHoldBlob(
     type = 'pinch';
     reason = '竖向捏点比例';
     confidence = 0.8;
-  } else if (area >= 420 && solidity >= 0.66 && blob.lipContrast < 0.34) {
+  } else if (area >= 420 && solidity >= 0.62 && blob.lipContrast < 0.36) {
     type = 'sloper';
     reason = '圆润大弧面低反差特征';
     confidence = 0.8;
@@ -768,27 +953,24 @@ function classifyHoldBlob(
     confidence = 0.75;
   }
 
-  // Estimate pull angle from major axis (for crimps/microcrimps) or bright chalk/lighting lip vector!
+  // Estimate pull angle from major axis (for crimps/microcrimps/long slopers) or bright chalk/lighting lip vector!
   let angle = 0;
   if (type === 'foothold') {
     angle = 0;
-  } else if (type === 'crimp' || type === 'microcrimp') {
-    // Major axis of a flat horizontal crimp is 0°; tilted crimp rotates with principalDeg!
-    // Clamp realistic gym sidepull angles to [-75°, 75°] unless lighting strongly proves undercling
+  } else if (type === 'crimp' || type === 'microcrimp' || (type === 'sloper' && aspectRatio >= 1.7)) {
     angle = Math.round(clamp(principalDeg, -72, 72) / 5) * 5;
   } else if (type === 'pinch') {
-    // Vertical pinch tilted slightly off vertical
     const devFromVert = principalDeg >= 0 ? principalDeg - 90 : principalDeg + 90;
     angle = Math.round(clamp(devFromVert, -55, 55) / 5) * 5;
   } else if (blob.lipContrast > 0.24) {
     angle = Math.round(clamp(blob.lipGradAngleDeg, -65, 65) / 5) * 5;
   }
 
-  // Realistic scale relative to the hold type's base radius
+  // Realistic scale relative to the hold type's base radius (supports oversized comp macros!)
   const approxRadiusCm = Math.sqrt(area / Math.PI);
   const typeBaseR =
     type === 'volume'
-      ? 21
+      ? 23
       : type === 'sloper'
         ? 14
         : type === 'jug'
@@ -800,7 +982,8 @@ function classifyHoldBlob(
               : type === 'crimp'
                 ? 9.5
                 : 7.4;
-  const scale = Math.round(clamp(approxRadiusCm / typeBaseR, 0.78, 1.32) * 20) / 20;
+  const maxScale = type === 'volume' || type === 'sloper' ? 1.55 : 1.32;
+  const scale = Math.round(clamp(approxRadiusCm / typeBaseR, 0.78, maxScale) * 20) / 20;
 
   // Detect Dual-Tex from specular gloss highlight ratio inside non-foothold/non-volume blobs
   const dualTex =
@@ -813,9 +996,9 @@ function classifyHoldBlob(
   // Map geometric cues cleanly to matching sculptural silhouette variant
   const shapeVariant =
     type === 'volume'
-      ? solidity > 0.76
+      ? solidity > 0.74
         ? 3
-        : aspectRatio > 1.5
+        : aspectRatio > 1.45
           ? 1
           : 0
       : styleFamily === 'comp'
@@ -833,7 +1016,8 @@ function classifyHoldBlob(
     role: 'normal',
     angle,
     scale,
-    color: type === 'volume' ? '#3D434C' : colorHex,
+    // Preserve true fiberglass macro color instead of forcing everything charcoal grey!
+    color: colorHex,
     styleFamily,
     shapeVariant,
     dualTex,
@@ -851,14 +1035,14 @@ function classifyHoldBlob(
 
 /**
  * Auto-assigns Start holds (lowest 1–2 handholds in realistic start zone) and TOP hold (highest handhold).
+ * Supports comp-style Macro/Volume start & finish holds as well!
  */
 function assignStartAndTopRoles(holds: Hold[]): Hold[] {
   const handIndices = holds
     .map((h, i) => ({ h, i }))
-    .filter(({ h }) => h.type !== 'foothold' && h.type !== 'volume');
+    .filter(({ h }) => h.type !== 'foothold');
 
   if (handIndices.length === 0) {
-    // Promote highest and lowest holds if everything looked small
     if (holds.length >= 2) {
       const sorted = [...holds].sort((a, b) => a.y - b.y);
       sorted[0].role = 'start';
@@ -871,28 +1055,29 @@ function assignStartAndTopRoles(holds: Hold[]): Hold[] {
 
   handIndices.sort((a, b) => a.h.y - b.h.y);
 
-  // Top hold = highest handhold
+  // Top hold = highest hold (including top comp macro/rail!)
   const topEntry = handIndices[handIndices.length - 1];
   holds[topEntry.i].role = 'top';
 
-  // Start hold(s) = lowest handhold(s) above typical foothold knee level (y >= 72cm when possible)
-  const startCandidates = handIndices.filter(
-    ({ h, i }) => i !== topEntry.i && h.y >= 72
-  );
-  const startPool = startCandidates.length > 0 ? startCandidates : handIndices.filter(({ i }) => i !== topEntry.i);
+  // Start hold(s) = lowest realistic handhold(s) above floor-level kickboard (y >= 88cm when available)
+  const nonFloorHands = handIndices.filter(({ h, i }) => i !== topEntry.i && h.y >= 88);
+  const startPool =
+    nonFloorHands.length > 0
+      ? nonFloorHands
+      : handIndices.filter(({ i }) => i !== topEntry.i);
 
   if (startPool.length > 0) {
+    // Prefer non-volume handhold near start zone if one exists close to bottom, else use lowest macro
     const firstStart = startPool[0];
     holds[firstStart.i].role = 'start';
 
-    // If a second handhold sits at similar height (within 32cm vertically & 110cm horizontally), make it dual-start!
     const secondStart = startPool
       .slice(1)
       .find(
         ({ h }) =>
-          Math.abs(h.y - firstStart.h.y) <= 32 &&
+          Math.abs(h.y - firstStart.h.y) <= 34 &&
           Math.abs(h.x - firstStart.h.x) >= 26 &&
-          Math.abs(h.x - firstStart.h.x) <= 115
+          Math.abs(h.x - firstStart.h.x) <= 125
       );
     if (secondStart) {
       holds[secondStart.i].role = 'start';
@@ -1008,8 +1193,9 @@ export function recognizeHoldsFromRectifiedRgba(
 
   const w = buf.width;
   const h = buf.height;
-  const bgLab = estimateWallBackgroundLab(buf);
-  const rawMask = new Uint8Array(w * h);
+  const bgGrid = buildLocalBackgroundGrid(buf, 8, 9);
+  const seedMask = new Uint8Array(w * h);
+  const supportMask = new Uint8Array(w * h);
 
   // Average positive lightness & dominant color
   const avgR = positives.reduce((s, p) => s + p.rgb[0], 0) / positives.length;
@@ -1018,38 +1204,58 @@ export function recognizeHoldsFromRectifiedRgba(
   const baseSampleL = positives.reduce((s, p) => s + p.lab[0], 0) / positives.length;
   const dominantHex = normalizeHoldHex([avgR, avgG, avgB]);
   const tol = clamp(options.tolerance, 10, 60);
+  const seedTol = tol * 0.88;
+  const supportTol = tol * 1.32;
 
-  // 1. Per-pixel CIELAB chalk-tolerant contrastive classification
-  for (let i = 0, p4 = 0; i < w * h; i++, p4 += 4) {
-    const pxLab = rgbToLab(buf.data[p4], buf.data[p4 + 1], buf.data[p4 + 2]);
+  // 1. Per-pixel CIELCH hue-pure + local-background-aware dual-threshold classification
+  for (let y = 0; y < h; y++) {
+    const rowOff = y * w;
+    for (let x = 0; x < w; x++) {
+      const i = rowOff + x;
+      const p4 = i * 4;
+      const pxLab = rgbToLab(buf.data[p4], buf.data[p4 + 1], buf.data[p4 + 2]);
 
-    let minPosDist = Infinity;
-    for (let k = 0; k < positives.length; k++) {
-      const d = holdColorDistance(pxLab, positives[k].lab);
-      if (d < minPosDist) minPosDist = d;
-    }
-    if (minPosDist > tol) continue;
-
-    // Wall background rejection (prevents wood/grey wall bleed)
-    const bgDist = holdColorDistance(pxLab, bgLab);
-    if (bgDist < 12 && bgDist < minPosDist * 0.78) continue;
-
-    // Contrastive negative sample rejection
-    let rejected = false;
-    for (let k = 0; k < negatives.length; k++) {
-      const negD = holdColorDistance(pxLab, negatives[k].lab);
-      if (negD < minPosDist * 0.96 || negD < 10) {
-        rejected = true;
-        break;
+      let minSeedDist = Infinity;
+      let minSupportDist = Infinity;
+      for (let k = 0; k < positives.length; k++) {
+        const dSeed = holdColorDistance(pxLab, positives[k].lab, true);
+        if (dSeed < minSeedDist) minSeedDist = dSeed;
+        const dSup = holdColorDistance(pxLab, positives[k].lab, false);
+        if (dSup < minSupportDist) minSupportDist = dSup;
       }
-    }
-    if (!rejected) {
-      rawMask[i] = 1;
+      if (minSupportDist > supportTol) continue;
+
+      // Local tile wall-background rejection (solves two-tone white + dark charcoal gym walls!)
+      const localBg = sampleLocalBackground(bgGrid, x, y, w, h);
+      const bgEuclidean = Math.hypot(
+        (pxLab[0] - localBg[0]) * 0.72,
+        pxLab[1] - localBg[1],
+        pxLab[2] - localBg[2]
+      );
+      if (bgEuclidean < 9.5 && bgEuclidean < minSupportDist * 0.75) continue;
+
+      // Contrastive negative sample rejection
+      let rejected = false;
+      for (let k = 0; k < negatives.length; k++) {
+        const negD = holdColorDistance(pxLab, negatives[k].lab, false);
+        if (negD < minSupportDist * 0.94 || negD < 10) {
+          rejected = true;
+          break;
+        }
+      }
+      if (rejected) continue;
+
+      supportMask[i] = 1;
+      if (minSeedDist <= seedTol) {
+        seedMask[i] = 1;
+      }
     }
   }
 
-  // 2. Morphological closing + connected-component blob extraction
-  const closedMask = morphologicalClose(rawMask, w, h);
+  // 2. Despeckle seeds -> Hysteresis region grow into chalk/shadow faces -> 3x3 morphological close
+  const cleanSeeds = despeckleSeedMask(seedMask, w, h);
+  const grownMask = hysteresisGrowMask(cleanSeeds, supportMask, w, h);
+  const closedMask = morphologicalClose(grownMask, w, h);
   const blobs = extractHoldBlobs(
     closedMask,
     w,
@@ -1121,5 +1327,6 @@ export function recognizeHoldsFromRectifiedRgba(
     elapsedMs: Math.max(1, Math.round(t1 - t0)),
     maskWidth: w,
     maskHeight: h,
+    mask: closedMask,
   };
 }

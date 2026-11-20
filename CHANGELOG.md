@@ -2,6 +2,17 @@
 
 All notable changes to **BETA 抱石台 (`boulder-beta`)** follow [Semantic Versioning](https://semver.org/).
 
+## [v1.5.2] - 2026-11-20
+### Improved
+- **Real-World Gym Photo Vision Engine V2 (`src/game/photoVision.ts`)**:
+  - Replaced single global background color with an `8×9` spatial local wall-background grid so multi-tone gyms (e.g. white upper panels + dark charcoal-blue lower panels) never bleed into hold masks.
+  - Added CIELCH hue-angle purity gating + Canny-style dual-threshold hysteresis region growing, cleanly separating pastel/mint holds from blue-grey walls, climbers, and competing hold colors.
+  - Upgraded fragment merging to actual pixel-boundary proximity (prevents merging diagonally stacked competition rails while still reconnecting chalk-split or hand-occluded hold halves) and preserved real hold color & Start/TOP eligibility on oversized competition macros.
+- **Stage 3 Interactive Polish (`src/game/photoModal.ts`)**:
+  - Added live translucent segmentation mask tint preview so matched pixels are visually verified in real time.
+  - Added `✎ 补点/删点` direct tap-to-add / tap-to-delete mode in Stage 3 for instant recovery of climber-occluded holds.
+  - Added automatic top/bottom UI-chrome crop framing for tall mobile app screenshots (e.g. Xiaohongshu / Douyin).
+
 ## [v1.5.1] - 2026-11-20
 ### Added & Fixed
 - **Mobile 1-Tap Photo Shortcut**: Added a dedicated camera button (`识图`) right in the mobile top bar so phone users can launch photo/camera route recognition immediately from any mode, plus accented styling on the mobile Setter `拍照识图` button.

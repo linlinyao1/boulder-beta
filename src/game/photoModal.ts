@@ -1,5 +1,6 @@
-import { HOLD_SPECS } from './holds';
+import { HOLD_SPECS, renumberHolds } from './holds';
 import { clamp } from './ik';
+import { nextUid } from './generator';
 import {
   ColorSample,
   QuadCorners,
@@ -178,12 +179,13 @@ export class PhotoRouteModal {
   private rectifiedRgba: RgbaBuffer | null = null;
 
   private samples: ColorSample[] = [];
-  private sampleMode: 'include' | 'exclude' = 'include';
+  private sampleMode: 'include' | 'exclude' | 'edit' = 'include';
   private tolerance = 26;
   private minHoldAreaPx = 34;
   private wallAngleDeg = 15;
   private enablePhysicsCalibration = true;
   private lastResult: RecognitionResult | null = null;
+  private maskOverlayCanvas: HTMLCanvasElement | null = null;
 
   private cropCanvas: HTMLCanvasElement | null = null;
   private detectCanvas: HTMLCanvasElement | null = null;
@@ -240,7 +242,17 @@ export class PhotoRouteModal {
         const ctx = c.getContext('2d')!;
         ctx.drawImage(img, 0, 0, c.width, c.height);
         this.sourceCanvas = c;
-        this.quad = DEFAULT_QUAD.map((p) => ({ ...p })) as QuadCorners;
+        // Auto-trim top status/search bar & bottom caption bar on tall mobile app screenshots (e.g. Xiaohongshu/Douyin)!
+        const aspect = c.height / Math.max(1, c.width);
+        this.quad =
+          aspect > 1.72
+            ? [
+                { x: 0.02, y: 0.1 },
+                { x: 0.98, y: 0.1 },
+                { x: 0.98, y: 0.82 },
+                { x: 0.02, y: 0.82 },
+              ]
+            : (DEFAULT_QUAD.map((p) => ({ ...p })) as QuadCorners);
         this.stage = 'crop';
         this.renderUI();
       };
@@ -298,6 +310,101 @@ export class PhotoRouteModal {
       wallAngleDeg: this.wallAngleDeg,
       enablePhysicsCalibration: this.enablePhysicsCalibration,
     });
+    this.buildMaskOverlayCanvas(this.lastResult);
+    this.drawDetectCanvas();
+    this.updateDetectTelemetryUI();
+  }
+
+  private buildMaskOverlayCanvas(res: RecognitionResult | null): void {
+    if (!res?.mask) {
+      this.maskOverlayCanvas = null;
+      return;
+    }
+    const mc = document.createElement('canvas');
+    mc.width = res.maskWidth;
+    mc.height = res.maskHeight;
+    const mctx = mc.getContext('2d')!;
+    const img = mctx.createImageData(res.maskWidth, res.maskHeight);
+    const d = img.data;
+    const m = res.mask;
+    for (let i = 0, p4 = 0; i < m.length; i++, p4 += 4) {
+      if (m[i]) {
+        d[p4] = 34;
+        d[p4 + 1] = 211;
+        d[p4 + 2] = 166;
+        d[p4 + 3] = 105;
+      }
+    }
+    mctx.putImageData(img, 0, 0);
+    this.maskOverlayCanvas = mc;
+  }
+
+  private handleManualHoldEdit(px: number, py: number): void {
+    const worldX = Math.round(clamp(px, 22, WALL_WIDTH_CM - 22));
+    const worldY = Math.round(clamp(WALL_HEIGHT_CM - py, 22, WALL_HEIGHT_CM - 22));
+
+    if (!this.lastResult) {
+      this.lastResult = {
+        holds: [],
+        details: [],
+        dominantHex: '#4E8975',
+        estimatedGrade: 'Custom',
+        solved: false,
+        calibrationNotes: ['已进入手动补点模式'],
+        elapsedMs: 1,
+        maskWidth: WALL_WIDTH_CM,
+        maskHeight: WALL_HEIGHT_CM,
+      };
+    }
+
+    // Check if tapping an existing hold -> remove it!
+    const existing = this.lastResult.holds;
+    let hitIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < existing.length; i++) {
+      const h = existing[i];
+      const hitR = Math.max(16, HOLD_SPECS[h.type].baseRadiusCm * h.scale * 1.2);
+      const d = Math.hypot(h.x - worldX, h.y - worldY);
+      if (d <= hitR && d < bestDist) {
+        bestDist = d;
+        hitIdx = i;
+      }
+    }
+
+    let nextHolds = [...existing];
+    if (hitIdx >= 0) {
+      nextHolds.splice(hitIdx, 1);
+      this.lastResult.calibrationNotes = ['已删除误识别岩点（可继续点击补点或删点）'];
+    } else {
+      nextHolds.push({
+        id: nextUid('phm'),
+        label: 0,
+        x: worldX,
+        y: worldY,
+        type: 'crimp',
+        role: 'normal',
+        angle: 0,
+        scale: 1.05,
+        color: this.lastResult.dominantHex,
+        styleFamily: 'comp',
+        shapeVariant: 1,
+      });
+      this.lastResult.calibrationNotes = ['已手动补加 1 颗岩点（导入定线台后可调点型/角度）'];
+    }
+
+    // Ensure Start & TOP exist when >= 2 holds
+    if (nextHolds.length >= 2) {
+      if (!nextHolds.some((h) => h.role === 'top')) {
+        const highest = [...nextHolds].sort((a, b) => b.y - a.y)[0];
+        highest.role = 'top';
+      }
+      if (!nextHolds.some((h) => h.role === 'start')) {
+        const lowest = [...nextHolds].filter((h) => h.role !== 'top').sort((a, b) => a.y - b.y)[0];
+        if (lowest) lowest.role = 'start';
+      }
+    }
+
+    this.lastResult.holds = renumberHolds(nextHolds);
     this.drawDetectCanvas();
     this.updateDetectTelemetryUI();
   }
@@ -402,10 +509,11 @@ export class PhotoRouteModal {
           </div>
         </div>
         <div class="pm-controls">
-          <div class="section-sub" style="margin-bottom:6px;">点击取样模式</div>
+          <div class="section-sub" style="margin-bottom:6px;">交互模式（取色 / 手动增删岩点）</div>
           <div class="role-row" style="margin-bottom:10px;">
-            <button id="pm-mode-inc" class="btn btn-sm ${this.sampleMode === 'include' ? 'btn-primary' : ''}">+ 选岩点色 (正样本)</button>
-            <button id="pm-mode-exc" class="btn btn-sm ${this.sampleMode === 'exclude' ? 'btn-danger' : ''}">− 排除杂色 (负样本)</button>
+            <button id="pm-mode-inc" class="btn btn-sm ${this.sampleMode === 'include' ? 'btn-primary' : ''}">+ 选岩点色</button>
+            <button id="pm-mode-exc" class="btn btn-sm ${this.sampleMode === 'exclude' ? 'btn-danger' : ''}">− 排除杂色</button>
+            <button id="pm-mode-edit" class="btn btn-sm ${this.sampleMode === 'edit' ? 'btn-primary' : ''}">✎ 补点/删点</button>
             <button id="pm-clear-samples" class="btn btn-sm">清空</button>
           </div>
 
@@ -519,8 +627,14 @@ export class PhotoRouteModal {
         const rect = this.detectCanvas.getBoundingClientRect();
         const px = clamp(((e.clientX - rect.left) / rect.width) * WALL_WIDTH_CM, 2, WALL_WIDTH_CM - 3);
         const py = clamp(((e.clientY - rect.top) / rect.height) * WALL_HEIGHT_CM, 2, WALL_HEIGHT_CM - 3);
+
+        if (this.sampleMode === 'edit' && e.button !== 2) {
+          this.handleManualHoldEdit(px, py);
+          return;
+        }
+
         const sampled = samplePatchColor(this.rectifiedRgba, px, py, 4);
-        const kind: 'include' | 'exclude' = e.button === 2 ? 'exclude' : this.sampleMode;
+        const kind: 'include' | 'exclude' = e.button === 2 ? 'exclude' : this.sampleMode === 'exclude' ? 'exclude' : 'include';
         this.samples.push({
           x: px,
           y: py,
@@ -533,19 +647,37 @@ export class PhotoRouteModal {
       this.detectCanvas.addEventListener('contextmenu', (e) => e.preventDefault());
     }
 
+    const syncModeButtons = () => {
+      this.backdrop.querySelector('#pm-mode-inc')?.classList.toggle('btn-primary', this.sampleMode === 'include');
+      this.backdrop.querySelector('#pm-mode-exc')?.classList.toggle('btn-danger', this.sampleMode === 'exclude');
+      this.backdrop.querySelector('#pm-mode-edit')?.classList.toggle('btn-primary', this.sampleMode === 'edit');
+      const tip = this.backdrop.querySelector('#pm-detect-tip');
+      if (tip) {
+        tip.textContent =
+          this.sampleMode === 'edit'
+            ? '手动微调模式：点击已识别岩点直接删除，点击空白处手动补一颗岩点（适合被攀爬者挡住的点）'
+            : this.sampleMode === 'exclude'
+              ? '排除杂色模式：点击误识别的背景墙/其他色点，立即将其从识别结果中剔除'
+              : '点击图片上目标线路的任意 1 颗岩点，立即自动提取全墙同色岩点（支持双色墙/沾粉/阴影）';
+      }
+    };
+
     this.backdrop.querySelector('#pm-mode-inc')?.addEventListener('click', () => {
       this.sampleMode = 'include';
-      this.backdrop.querySelector('#pm-mode-inc')?.classList.add('btn-primary');
-      this.backdrop.querySelector('#pm-mode-exc')?.classList.remove('btn-danger');
+      syncModeButtons();
     });
     this.backdrop.querySelector('#pm-mode-exc')?.addEventListener('click', () => {
       this.sampleMode = 'exclude';
-      this.backdrop.querySelector('#pm-mode-inc')?.classList.remove('btn-primary');
-      this.backdrop.querySelector('#pm-mode-exc')?.classList.add('btn-danger');
+      syncModeButtons();
+    });
+    this.backdrop.querySelector('#pm-mode-edit')?.addEventListener('click', () => {
+      this.sampleMode = 'edit';
+      syncModeButtons();
     });
     this.backdrop.querySelector('#pm-clear-samples')?.addEventListener('click', () => {
       this.samples = [];
       this.lastResult = null;
+      this.maskOverlayCanvas = null;
       this.drawDetectCanvas();
       this.updateDetectTelemetryUI();
     });
@@ -725,6 +857,11 @@ export class PhotoRouteModal {
 
     ctx.clearRect(0, 0, w, h);
     ctx.drawImage(this.rectifiedCanvas, 0, 0, w, h);
+
+    // Translucent live pixel-mask preview so the user sees exact segmented hold pixels
+    if (this.maskOverlayCanvas) {
+      ctx.drawImage(this.maskOverlayCanvas, 0, 0, w, h);
+    }
 
     // Draw recognized hold overlays
     if (this.lastResult) {
