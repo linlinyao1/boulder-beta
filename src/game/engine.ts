@@ -570,18 +570,21 @@ export class BoulderEngine {
   }
 
   public inspectStep(index: number): void {
+    const prevIndex = this.inspectedStepIndex;
     this.inspectedStepIndex = clamp(index, -1, this.betaSteps.length - 1);
     this.recomputePreviewEvaluations();
-    this.syncPlanPose(false);
+    // Smoothly blend adjacent 1-step changes; snap cleanly when jumping across multiple steps to avoid mid-air flying
+    this.syncPlanPose(Math.abs(this.inspectedStepIndex - prevIndex) > 1);
     this.emit();
   }
 
   public undoBetaStep(): void {
     if (this.betaSteps.length === 0) return;
+    const prevIndex = this.inspectedStepIndex;
     this.betaSteps = this.betaSteps.slice(0, -1);
     this.inspectedStepIndex = this.betaSteps.length - 1;
     this.recomputeBeta();
-    this.syncPlanPose(false);
+    this.syncPlanPose(Math.abs(this.inspectedStepIndex - prevIndex) > 1);
     this.emit();
   }
 
@@ -590,24 +593,28 @@ export class BoulderEngine {
     this.betaSteps = this.betaSteps.filter((_, i) => i !== index);
     this.inspectedStepIndex = Math.min(this.inspectedStepIndex, this.betaSteps.length - 1);
     this.recomputeBeta();
-    this.syncPlanPose(false);
+    this.syncPlanPose(true);
     this.emit();
   }
 
   public clearBeta(): void {
+    const prevIndex = this.inspectedStepIndex;
     this.betaSteps = [];
     this.inspectedStepIndex = -1;
     this.recomputeBeta();
-    this.syncPlanPose(false);
+    this.syncPlanPose(prevIndex > 0);
     this.emit();
   }
 
   public autoSuggestBeta(): { solved: boolean; stepsCount: number } {
     const sol = suggestBeta(this.holds, this.profile, 24, 24, this.wallAngleDeg);
     this.betaSteps = sol.steps;
-    this.inspectedStepIndex = sol.steps.length - 1;
+    // Stay grounded on Start holds so the user sees the complete Beta arrow path and can step through or click Climb,
+    // rather than tweening the climber straight through mid-air to the TOP hold!
+    this.inspectedStepIndex = -1;
+    this.showBetaArrows = true;
     this.recomputeBeta();
-    this.syncPlanPose(false);
+    this.syncPlanPose(true);
     this.emit();
     return { solved: sol.solved, stepsCount: sol.steps.length };
   }

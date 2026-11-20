@@ -5,11 +5,20 @@ export interface ReleaseNote {
   highlights: string[];
 }
 
-export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.4.0';
+export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.4.1';
 export const GIT_COMMIT: string = typeof __GIT_COMMIT__ !== 'undefined' ? __GIT_COMMIT__ : 'dev';
 export const BUILD_TIME: string = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
 
 export const RELEASE_NOTES: ReleaseNote[] = [
+  {
+    version: '1.4.1',
+    date: '2026-11-20',
+    title: '修复 AI 推演与跨步预览时人物凌空飞向终点的问题',
+    highlights: [
+      '点击「AI 推演」后人物保持稳态停在起步姿势，直接展示完整 Beta 箭头路径，不再凌空直飞至完攀点',
+      '优化规划模式下的姿势过渡：仅相邻单步平滑补间，跨多步跳转或清空步骤时直接切态，杜绝穿墙漂移',
+    ],
+  },
   {
     version: '1.4.0',
     date: '2026-11-20',

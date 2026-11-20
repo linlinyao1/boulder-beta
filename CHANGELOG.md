@@ -2,6 +2,11 @@
 
 All notable changes to **BETA 抱石台 (`boulder-beta`)** follow [Semantic Versioning](https://semver.org/).
 
+## [v1.4.1] - 2026-11-20
+### Fixed
+- Fixed climber awkwardly flying straight across the wall to the TOP hold after clicking **AI 推演 (`autoSuggestBeta`)**: the climber now stays grounded on the Start holds with full Beta path arrows displayed immediately, ready to step through or play the climb animation.
+- Prevented mid-air floating transitions when jumping across multiple steps (`inspectStep`) or clearing a long Beta sequence (`clearBeta`); smooth limb blending now applies only to adjacent single-step transitions.
+
 ## [v1.4.0] - 2026-11-20
 ### Added
 - **Real-world climbing hold shaping system** (`src/game/holdShapes.ts`): 25 sculpted hold silhouettes across 8 hold types (`3–4` variants per type) and 3 cohesive design families (`拟岩砂岩` / `比赛流线` / `几何切面`).
